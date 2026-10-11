@@ -157,6 +157,7 @@ mod m20261008_000300_add_mst2_chunk_map_retention;
 mod m20261008_000400_add_mst2_reader_retention;
 mod m20261008_000500_fix_mst2_native_runtime;
 mod m20261008_000600_fix_mst2_descriptor_wire;
+mod m20261009_000100_upgrade_qualified_publication_handoff;
 pub(crate) mod qualified_native_runtime_upgrade;
 mod runner;
 pub use m20260905_000100_add_push_queue::ensure_queue_control_seed;
@@ -355,7 +356,49 @@ impl MigratorTrait for Migrator {
             Box::new(m20261008_000400_add_mst2_reader_retention::Migration),
             Box::new(m20261008_000500_fix_mst2_native_runtime::Migration),
             Box::new(m20261008_000600_fix_mst2_descriptor_wire::Migration),
+            Box::new(m20261009_000100_upgrade_qualified_publication_handoff::Migration),
         ]
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn test_upgrade_publication_handoff(
+    connection: &sea_orm::DatabaseConnection,
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::TransactionTrait;
+    use sea_orm_migration::{MigrationTrait, SchemaManager};
+
+    let txn = connection.begin().await?;
+    let result = m20261009_000100_upgrade_qualified_publication_handoff::Migration
+        .up(&SchemaManager::new(&txn))
+        .await;
+    match result {
+        Ok(()) => txn.commit().await,
+        Err(error) => {
+            txn.rollback().await?;
+            Err(error)
+        }
+    }
+}
+
+/// Test-only: run the publication-handoff migration with the post-install fault enabled.
+#[cfg(test)]
+pub(crate) async fn test_upgrade_publication_handoff_with_fault(
+    connection: &sea_orm::DatabaseConnection,
+) -> Result<(), sea_orm::DbErr> {
+    use qualified_native_runtime_upgrade as engine;
+    use sea_orm::TransactionTrait;
+    use sea_orm_migration::SchemaManager;
+
+    let txn = connection.begin().await?;
+    let manager = SchemaManager::new(&txn);
+    let result = engine::upgrade_publication_handoff_with_fault(&manager, true).await;
+    match result {
+        Ok(()) => txn.commit().await,
+        Err(error) => {
+            txn.rollback().await?;
+            Err(error)
+        }
     }
 }
 
@@ -1285,6 +1328,7 @@ mod tests {
             "m20261008_000400_add_mst2_reader_retention",
             "m20261008_000500_fix_mst2_native_runtime",
             "m20261008_000600_fix_mst2_descriptor_wire",
+            "m20261009_000100_upgrade_qualified_publication_handoff",
         ]
         .map(str::to_owned);
         assert_eq!(

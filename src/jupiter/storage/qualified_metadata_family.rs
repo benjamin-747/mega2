@@ -136,58 +136,71 @@ fn literal(value: &str) -> String {
 pub(crate) fn implementation_fingerprint() -> Vec<u8> {
     static FINGERPRINT: OnceLock<[u8; 32]> = OnceLock::new();
     FINGERPRINT
-        .get_or_init(|| {
-            let mut hash = Sha256::new();
-            hash.update(b"mega.mst2.rooted-qualified-implementation.v1\0");
-            // Length-prefix every source component so source selection and proof
-            // revisions cannot change while retaining an accepted physical stamp.
-            for (name, bytes) in [
-                ("family", FAMILY.as_bytes()),
-                ("family-ddl", FAMILY_SQL.as_bytes()),
-                ("canonical-proof-revision-1", CANONICAL_SQL.as_bytes()),
-                ("indexed-source-read-revision-1", SOURCE_READ_SQL.as_bytes()),
-                ("captured-source-revision-1", SOURCE_REVISION_SQL.as_bytes()),
-                ("rooted-collector-revision-1", GC_SQL.as_bytes()),
-                (
-                    "bounded-reader-lifecycle-revision-1",
-                    READER_LIFECYCLE_SQL.as_bytes(),
-                ),
-                ("typed-certificate-revision-1", CERTIFICATES_SQL.as_bytes()),
-                (
-                    "source-attestation-and-anchor-revision-1",
-                    ANCHORS_SQL.as_bytes(),
-                ),
-                ("rooted-plan-and-bindings-revision-1", ROOTED_SQL.as_bytes()),
-                (
-                    "rooted-session-and-reader-revision-1",
-                    SERVING_SQL.as_bytes(),
-                ),
-                (
-                    "rooted-physical-route-revision-1",
-                    include_bytes!("../migration/m20261008_000200_rooted_routes.sql").as_slice(),
-                ),
-                (
-                    "authority-catalog-selector",
-                    include_bytes!("qualified_family_catalog.sql").as_slice(),
-                ),
-                (
-                    "normalized-family-shape",
-                    include_bytes!("qualified_family_shape.sql").as_slice(),
-                ),
-                (
-                    "initial-core-registration",
-                    include_bytes!("../migration/m20261008_000200_rooted_qualified_family.sql")
-                        .as_slice(),
-                ),
-            ] {
-                hash.update((name.len() as u64).to_le_bytes());
-                hash.update(name.as_bytes());
-                hash.update((bytes.len() as u64).to_le_bytes());
-                hash.update(bytes);
-            }
-            hash.finalize().into()
-        })
+        .get_or_init(|| fingerprint_with_serving(SERVING_SQL))
         .to_vec()
+}
+
+/// Recompute the implementation fingerprint of the tree immediately before FIX-OX-20 by putting the
+/// captured prior `mst2_metadata_handoff` body back into this tree's serving revision. FIX-OX-20
+/// changed no other fingerprinted source, so this must reproduce that tree's landing stamp and thus
+/// lets the migration's anchored constant be checked against the captured artifact.
+pub(crate) fn fingerprint_with_captured_prior_handoff(prior_body: &str) -> Option<[u8; 32]> {
+    let marker = SERVING_SQL.find("FUNCTION mst2_metadata_handoff(")?;
+    let start = SERVING_SQL[..marker].rfind("CREATE ")?;
+    let end = SERVING_SQL[start..].find("$$;")? + start + "$$;".len();
+    let prior = SERVING_SQL.replacen(&SERVING_SQL[start..end], prior_body, 1);
+    Some(fingerprint_with_serving(&prior))
+}
+
+/// The fingerprint this module produces for an alternative serving revision. Re-deriving the
+/// pre-FIX-OX-20 landing stamp from the captured prior function body uses this, so the migration's
+/// anchored constant is checkable against the artifact rather than only against itself.
+pub(crate) fn fingerprint_with_serving(serving: &str) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"mega.mst2.rooted-qualified-implementation.v1\0");
+    // Length-prefix every source component so source selection and proof
+    // revisions cannot change while retaining an accepted physical stamp.
+    for (name, bytes) in [
+        ("family", FAMILY.as_bytes()),
+        ("family-ddl", FAMILY_SQL.as_bytes()),
+        ("canonical-proof-revision-1", CANONICAL_SQL.as_bytes()),
+        ("indexed-source-read-revision-1", SOURCE_READ_SQL.as_bytes()),
+        ("captured-source-revision-1", SOURCE_REVISION_SQL.as_bytes()),
+        ("rooted-collector-revision-1", GC_SQL.as_bytes()),
+        (
+            "bounded-reader-lifecycle-revision-1",
+            READER_LIFECYCLE_SQL.as_bytes(),
+        ),
+        ("typed-certificate-revision-1", CERTIFICATES_SQL.as_bytes()),
+        (
+            "source-attestation-and-anchor-revision-1",
+            ANCHORS_SQL.as_bytes(),
+        ),
+        ("rooted-plan-and-bindings-revision-1", ROOTED_SQL.as_bytes()),
+        ("rooted-session-and-reader-revision-1", serving.as_bytes()),
+        (
+            "rooted-physical-route-revision-1",
+            include_bytes!("../migration/m20261008_000200_rooted_routes.sql").as_slice(),
+        ),
+        (
+            "authority-catalog-selector",
+            include_bytes!("qualified_family_catalog.sql").as_slice(),
+        ),
+        (
+            "normalized-family-shape",
+            include_bytes!("qualified_family_shape.sql").as_slice(),
+        ),
+        (
+            "initial-core-registration",
+            include_bytes!("../migration/m20261008_000200_rooted_qualified_family.sql").as_slice(),
+        ),
+    ] {
+        hash.update((name.len() as u64).to_le_bytes());
+        hash.update(name.as_bytes());
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    hash.finalize().into()
 }
 pub(crate) fn render_family(
     core_schema: &str,

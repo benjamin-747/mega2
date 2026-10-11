@@ -292,6 +292,33 @@ async fn restore_reader_family(
     legacy_shape: bool,
     implementation: &str,
 ) {
+    restore_reader_family_with(core, q_schema, keep_q, legacy_shape, implementation, false).await;
+}
+
+pub(crate) async fn restore_last_landed_reader_family(
+    core: &DatabaseConnection,
+    q_schema: &str,
+    keep_q: bool,
+) {
+    restore_reader_family_with(
+        core,
+        q_schema,
+        keep_q,
+        false,
+        crate::jupiter::migration::qualified_native_runtime_upgrade::PUBLICATION_HANDOFF_PRIOR_IMPLEMENTATION,
+        true,
+    )
+    .await;
+}
+
+async fn restore_reader_family_with(
+    core: &DatabaseConnection,
+    q_schema: &str,
+    keep_q: bool,
+    legacy_shape: bool,
+    implementation: &str,
+    publication_handoff_prior: bool,
+) {
     use crate::jupiter::migration::qualified_native_runtime_upgrade::render_prior_family;
 
     assert!(!legacy_shape || !keep_q);
@@ -314,33 +341,58 @@ async fn restore_reader_family(
     let oid: i64 = registry.try_get("", "metadata_schema_oid").unwrap();
     let namespace: String = registry.try_get("", "namespace_uuid").unwrap();
     let storage: String = registry.try_get("", "metadata_storage_uuid").unwrap();
-    let rendered = render_prior_family(
-        &core_schema,
-        core_oid,
-        q_schema,
-        oid,
-        &namespace,
-        &storage,
-        implementation,
-    )
-    .unwrap();
+    let rendered = if publication_handoff_prior {
+        crate::jupiter::migration::qualified_native_runtime_upgrade::render_publication_handoff_prior(
+            &core_schema,
+            core_oid,
+            q_schema,
+            oid,
+            &namespace,
+            &storage,
+            implementation,
+        )
+        .unwrap()
+    } else {
+        render_prior_family(
+            &core_schema,
+            core_oid,
+            q_schema,
+            oid,
+            &namespace,
+            &storage,
+            implementation,
+        )
+        .unwrap()
+    };
     txn.execute_unprepared(&format!("SET LOCAL search_path={q},pg_catalog,pg_temp"))
         .await
         .unwrap();
-    for name in [
-        "mst2_metadata_decode_rooted_plan",
-        "mst2_metadata_descriptor",
-        "mst2_metadata_dml_barrier",
-        "mst2_metadata_gc_enabled",
-    ] {
-        let (a, z) = function(&rendered, name);
-        txn.execute_unprepared(&rendered[a..z].replacen(
-            "CREATE FUNCTION",
-            "CREATE OR REPLACE FUNCTION",
-            1,
-        ))
-        .await
-        .unwrap();
+    if publication_handoff_prior {
+        // The prior render stamps the released implementation fingerprint into every function
+        // body, so a partial install would leave a mixed-stamp family that can never match the
+        // migration's template render. Install the whole prior family instead.
+        let blocks =
+            crate::jupiter::migration::qualified_native_runtime_upgrade::family_function_blocks(
+                &rendered,
+            )
+            .unwrap();
+        txn.execute_unprepared(&blocks).await.unwrap();
+    } else {
+        for name in [
+            "mst2_metadata_decode_rooted_plan",
+            "mst2_metadata_descriptor",
+            "mst2_metadata_dml_barrier",
+            "mst2_metadata_gc_enabled",
+        ] {
+            let (a, z) = function(&rendered, name);
+            txn.execute_unprepared(&rendered[a..z].replacen(
+                "CREATE FUNCTION",
+                "CREATE OR REPLACE FUNCTION",
+                1,
+            ))
+            .await
+            .unwrap();
+        }
     }
     txn.execute_unprepared(&format!("SET LOCAL search_path={c},pg_catalog,pg_temp"))
         .await

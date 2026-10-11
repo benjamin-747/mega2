@@ -8,16 +8,91 @@ use crate::jupiter::storage::qualified_metadata_family::{
     implementation_fingerprint, render_family,
 };
 
+const PUBLICATION_HANDOFF_CAPTURE: &str =
+    "4590ef4923169511579689b9e72ae2494f9a9bc3f8e5fe788c6005e415bc0212";
+
 pub(crate) const PREVIOUS_IMPLEMENTATION: &str =
     "6d7095dc052e60bf6de21a987b72e23fdfbfe819355f0e847d2a7f3c1cbd3f27";
 
 pub(crate) const RETENTION_IMPLEMENTATION: &str =
     "900e7a340e7365c9f31995e070edbfe2076b870ec09fe89e4dc43e56f26b91ab";
+/// The implementation fingerprint a database carries after the plan's migrations ran on the tree
+/// immediately before FIX-OX-20 (`1b4c6b3^`). FIX-OX-20 changed exactly one fingerprinted source,
+/// the `mst2_metadata_handoff` body in `qualified_metadata_serving.sql`, so that state is the last
+/// landed family this forward migration must roll. Recomputed independently from the pre-FIX-OX-20
+/// sources with the same `implementation_fingerprint` algorithm.
+pub(crate) const PUBLICATION_HANDOFF_PRIOR_IMPLEMENTATION: &str =
+    "896fc7cfe5292762c012e98c91059961b3e7b7425e3ea473133a0d22411c1d46";
+
 pub(crate) const NATIVE_RUNTIME_IMPLEMENTATION: &str =
     "87b104e6b5593b1d6e5904a4e4be94e6ba0814dbb2c25dd8b38a0ea950d42307";
 const PREVIOUS_DECODER: &str = include_str!("m20261008_000500_previous_rooted_decoder.sql");
 const PREVIOUS_READERS: &str = include_str!("m20261008_000500_previous_reader_family.sql");
 const PREVIOUS_DESCRIPTOR: &str = include_str!("m20261008_000600_previous_descriptor.sql");
+
+/// Which trusted family revision an upgrade installs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InstallProfile {
+    /// Re-install the historical native-runtime family.
+    Native,
+    /// Repair canonical descriptor integer encoding.
+    Descriptor,
+    /// Install the current serving revision changed by the publication-handoff fix.
+    PublicationHandoff,
+}
+
+/// Every function declaration in a rendered family, in document order, normalised to
+/// `CREATE OR REPLACE` so the install converges whether or not the function already exists.
+///
+/// The family declares some functions more than once (a later `CREATE OR REPLACE` redefinition),
+/// so blocks are emitted in document order rather than deduplicated by name.
+pub(crate) fn family_function_blocks(rendered: &str) -> Result<String, DbErr> {
+    let mut out = String::new();
+    let mut index = 0usize;
+    let mut count = 0usize;
+    while let Some(offset) = rendered[index..].find("CREATE ") {
+        let at = index + offset;
+        let tail = &rendered[at..];
+        let declaration = tail
+            .strip_prefix("CREATE OR REPLACE FUNCTION ")
+            .map(|rest| ("CREATE OR REPLACE FUNCTION ", rest))
+            .or_else(|| {
+                tail.strip_prefix("CREATE FUNCTION ")
+                    .map(|rest| ("CREATE FUNCTION ", rest))
+            });
+        let Some((prefix, body)) = declaration else {
+            index = at + "CREATE ".len();
+            continue;
+        };
+        let end = body
+            .find("$$;")
+            .ok_or_else(|| rejected("native runtime family function body is unterminated"))?
+            + "$$;".len();
+        let block = &tail[..prefix.len() + end];
+        if prefix == "CREATE FUNCTION " {
+            out.push_str(&block.replacen("CREATE FUNCTION ", "CREATE OR REPLACE FUNCTION ", 1));
+        } else {
+            out.push_str(block);
+        }
+        out.push('\n');
+        count += 1;
+        index = at + prefix.len() + end;
+    }
+    // Completeness: the render is scanned with the same declaration test, so any declaration whose
+    // body is not terminated by `$$;` shows up as a mismatch instead of a silently partial install.
+    let declared = rendered
+        .lines()
+        .filter(|line| {
+            line.starts_with("CREATE FUNCTION ") || line.starts_with("CREATE OR REPLACE FUNCTION ")
+        })
+        .count();
+    if count == 0 || count != declared {
+        return Err(rejected(
+            "native runtime rendered family declares an unusable function set",
+        ));
+    }
+    Ok(out)
+}
 
 fn rejected(message: &str) -> DbErr {
     DbErr::Custom(message.into())
@@ -233,7 +308,32 @@ pub(crate) fn render_prior_family(
             "CREATE TRIGGER mst2_metadata_reader_issuance_guard BEFORE INSERT OR UPDATE OR DELETE ON mst2_metadata_reader_issuance\n  FOR EACH ROW EXECUTE FUNCTION mst2_metadata_reader_issuance_guard();", "",
         ).replace("'mst2_metadata_reader_issuance',", "");
     }
-    Ok(source
+    Ok(substitute_family_placeholders(
+        source,
+        core,
+        core_oid,
+        q,
+        q_oid,
+        namespace,
+        storage,
+        implementation,
+    ))
+}
+
+// Rationale: mirrors the placeholder-substitution arity the renderers share; bundling these into a
+// struct would add a type used only at these call sites.
+#[allow(clippy::too_many_arguments)]
+fn substitute_family_placeholders(
+    source: String,
+    core: &str,
+    core_oid: i64,
+    q: &str,
+    q_oid: i64,
+    namespace: &str,
+    storage: &str,
+    implementation: &str,
+) -> String {
+    source
         .replace(&hex::encode(implementation_fingerprint()), implementation)
         .replace("$CORE_SCHEMA$", &identifier(core))
         .replace("$CORE_LITERAL$", &literal(core))
@@ -243,7 +343,44 @@ pub(crate) fn render_prior_family(
         .replace("$Q_OID$", &q_oid.to_string())
         .replace("$NAMESPACE_UUID$", namespace)
         .replace("$STORAGE_UUID$", storage)
-        .replace("$IMPLEMENTATION_SHA$", implementation))
+        .replace("$IMPLEMENTATION_SHA$", implementation)
+}
+
+/// The pre-publication-handoff family: the current render with the captured prior handoff
+/// function, used to authenticate the forward migration.
+// Rationale: same arity as `render_family`/`render_prior_family`; the fixture and the migration
+// must call this renderer identically, so it keeps that family's public shape.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_publication_handoff_prior(
+    core: &str,
+    core_oid: i64,
+    q: &str,
+    q_oid: i64,
+    namespace: &str,
+    storage: &str,
+    implementation: &str,
+) -> Result<String, DbErr> {
+    const PREVIOUS_HANDOFF: &str =
+        include_str!("m20261009_000100_previous_publication_handoff_family.sql");
+    let previous = PREVIOUS_HANDOFF.replace("\r\n", "\n");
+    if hex::encode(Sha256::digest(previous.as_bytes())) != PUBLICATION_HANDOFF_CAPTURE {
+        return Err(rejected(
+            "publication handoff historical source capture changed",
+        ));
+    }
+    let mut source =
+        render_family(core, core_oid, q, q_oid, namespace, storage).replace("\r\n", "\n");
+    replace_function(&mut source, "mst2_metadata_handoff", &previous)?;
+    Ok(substitute_family_placeholders(
+        source,
+        core,
+        core_oid,
+        q,
+        q_oid,
+        namespace,
+        storage,
+        implementation,
+    ))
 }
 
 struct TrustedShape {
@@ -256,6 +393,16 @@ async fn template_shapes<C: ConnectionTrait>(
     core: &str,
     core_oid: i64,
     implementation: &[u8],
+) -> Result<TrustedShape, DbErr> {
+    template_shapes_with(connection, core, core_oid, implementation, false).await
+}
+
+async fn template_shapes_with<C: ConnectionTrait>(
+    connection: &C,
+    core: &str,
+    core_oid: i64,
+    implementation: &[u8],
+    publication_handoff_prior: bool,
 ) -> Result<TrustedShape, DbErr> {
     let namespace = uuid::Uuid::new_v4().to_string();
     let schema = format!("mst2q_{}", namespace.replace('-', ""));
@@ -275,11 +422,16 @@ async fn template_shapes<C: ConnectionTrait>(
         .ok_or_else(|| rejected("native runtime trusted template schema is missing"))?
         .try_get("", "oid")?;
     let version = hex::encode(implementation);
-    let source = if implementation == implementation_fingerprint().as_slice() {
-        render_family(core, core_oid, &schema, oid, &namespace, &storage)
-    } else {
-        render_prior_family(core, core_oid, &schema, oid, &namespace, &storage, &version)?
-    };
+    let source =
+        if publication_handoff_prior && implementation != implementation_fingerprint().as_slice() {
+            render_publication_handoff_prior(
+                core, core_oid, &schema, oid, &namespace, &storage, &version,
+            )?
+        } else if implementation == implementation_fingerprint().as_slice() {
+            render_family(core, core_oid, &schema, oid, &namespace, &storage)
+        } else {
+            render_prior_family(core, core_oid, &schema, oid, &namespace, &storage, &version)?
+        };
     connection.execute_unprepared(&source).await?;
     let canonical = shape(connection, oid, &namespace, &storage).await?;
     // Reproduce only the exact historical Q-visible deparsing defect. The
@@ -320,20 +472,50 @@ pub(super) async fn upgrade(
     manager: &SchemaManager<'_>,
     allow_previous_readers: bool,
 ) -> Result<(), DbErr> {
-    upgrade_to(manager, allow_previous_readers, false).await
+    upgrade_to(
+        manager,
+        allow_previous_readers,
+        InstallProfile::Native,
+        false,
+    )
+    .await
 }
 
 pub(super) async fn upgrade_descriptor(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     // Finish an interrupted reader/runtime upgrade before the independent
     // descriptor repair, without replaying reader DDL on an admitted family.
     upgrade(manager, true).await?;
-    upgrade_to(manager, false, true).await
+    upgrade_to(manager, false, InstallProfile::Descriptor, false).await
+}
+
+/// Forward-roll an admitted family to the publication-handoff serving revision.
+/// Replay is idempotent: an already-current family returns early.
+pub(super) async fn upgrade_publication_handoff(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    upgrade_to(manager, false, InstallProfile::PublicationHandoff, false).await
+}
+
+/// Test-only entry point that can fail the transaction immediately after the family install and its
+/// shape verification, so the rollback test can prove the installed DDL is undone.
+#[cfg(test)]
+pub(super) async fn upgrade_publication_handoff_with_fault(
+    manager: &SchemaManager<'_>,
+    fail_after_family_install: bool,
+) -> Result<(), DbErr> {
+    upgrade_to(
+        manager,
+        false,
+        InstallProfile::PublicationHandoff,
+        fail_after_family_install,
+    )
+    .await
 }
 
 async fn upgrade_to(
     manager: &SchemaManager<'_>,
     allow_previous_readers: bool,
-    repair_descriptor: bool,
+    profile: InstallProfile,
+    // Test seam for the rollback test; every production caller passes `false`.
+    #[cfg_attr(not(test), allow(unused_variables))] fail_after_family_install: bool,
 ) -> Result<(), DbErr> {
     if manager.get_database_backend() != DbBackend::Postgres {
         return Err(rejected(
@@ -401,20 +583,36 @@ async fn upgrade_to(
     let compiled = implementation_fingerprint();
     let runtime =
         hex::decode(NATIVE_RUNTIME_IMPLEMENTATION).map_err(|error| rejected(&error.to_string()))?;
-    let current = if repair_descriptor {
-        compiled.clone()
-    } else {
+    let current = if profile == InstallProfile::Native {
         runtime.clone()
+    } else {
+        compiled.clone()
     };
     let previous =
         hex::decode(PREVIOUS_IMPLEMENTATION).map_err(|error| rejected(&error.to_string()))?;
     let retention =
         hex::decode(RETENTION_IMPLEMENTATION).map_err(|error| rejected(&error.to_string()))?;
-    let supported = implementation == compiled
-        || implementation == runtime
-        || !repair_descriptor
-            && (implementation == retention
-                || allow_previous_readers && implementation == previous);
+    // Compare the encoded stamp directly: a decode fallback here would silently turn a broken
+    // constant into "no prior accepted" instead of failing loudly.
+    let publication_handoff_prior =
+        hex::encode(&implementation) == PUBLICATION_HANDOFF_PRIOR_IMPLEMENTATION;
+    // Accepted stamps per profile:
+    //   * `compiled`             — already current; the caller returns early.
+    //   * `PublicationHandoff`   — exactly `compiled` (early return) or the one prior revision this
+    //     forward migration rolls. Nothing else is authenticated for it, so a family stamped with
+    //     any other revision is refused instead of being re-rendered from the wrong prior.
+    //   * `Native` (historical)  — `compiled`, `runtime`, and the reader-retention/previous stamps
+    //     the m20261008_000500 re-install path handles.
+    //   * `Descriptor` (000600)  — `compiled` or `runtime`.
+    let supported = if profile == InstallProfile::PublicationHandoff {
+        implementation == compiled || publication_handoff_prior
+    } else {
+        implementation == compiled
+            || implementation == runtime
+            || (profile != InstallProfile::Descriptor
+                && (implementation == retention
+                    || allow_previous_readers && implementation == previous))
+    };
     if !supported {
         return Err(rejected(
             "reader migration refuses an unsupported prior implementation",
@@ -496,7 +694,14 @@ async fn upgrade_to(
             ));
         }
     }
-    let prior = template_shapes(connection, &core, core_oid, &implementation).await?;
+    let prior = template_shapes_with(
+        connection,
+        &core,
+        core_oid,
+        &implementation,
+        publication_handoff_prior,
+    )
+    .await?;
     let recorded_shape: Vec<u8> = policy.try_get("", "expected_shape")?;
     if recorded_shape != prior.canonical
         && !(implementation == retention
@@ -529,16 +734,7 @@ async fn upgrade_to(
     if let Some(family) = &family {
         let q = identifier(&family.schema);
         connection.execute_unprepared(&format!("LOCK TABLE {q}.mst2_metadata_reader_operation,{q}.mst2_metadata_root_anchor IN ACCESS EXCLUSIVE MODE")).await?;
-        let rendered = if repair_descriptor {
-            render_family(
-                &core,
-                core_oid,
-                &family.schema,
-                family.oid,
-                &family.namespace,
-                &family.storage,
-            )
-        } else {
+        let rendered = if profile == InstallProfile::Native {
             render_prior_family(
                 &core,
                 core_oid,
@@ -548,16 +744,28 @@ async fn upgrade_to(
                 &family.storage,
                 NATIVE_RUNTIME_IMPLEMENTATION,
             )?
+        } else {
+            render_family(
+                &core,
+                core_oid,
+                &family.schema,
+                family.oid,
+                &family.namespace,
+                &family.storage,
+            )
         };
         let mut functions = String::new();
-        let replacements: &[&str] = if repair_descriptor {
-            &[
+        let replacements: Vec<&str> = if profile == InstallProfile::PublicationHandoff {
+            // Filled by the whole-family install below.
+            Vec::new()
+        } else if profile == InstallProfile::Descriptor {
+            vec![
                 "mst2_metadata_descriptor",
                 "mst2_metadata_dml_barrier",
                 "mst2_metadata_gc_enabled",
             ]
         } else if implementation == previous {
-            &[
+            vec![
                 "mst2_metadata_decode_rooted_plan",
                 "mst2_metadata_dml_barrier",
                 "mst2_metadata_gc_enabled",
@@ -574,15 +782,21 @@ async fn upgrade_to(
                 "mst2_metadata_gc_owner_cleanup",
             ]
         } else {
-            &[
+            vec![
                 "mst2_metadata_decode_rooted_plan",
                 "mst2_metadata_dml_barrier",
                 "mst2_metadata_gc_enabled",
             ]
         };
-        for name in replacements {
-            functions.push_str(&trusted_function(&rendered, name)?);
-            functions.push('\n');
+        if profile == InstallProfile::PublicationHandoff {
+            // The released family carries the prior implementation stamp inside every function
+            // body, so only a whole-family install converges on the current compiled shape.
+            functions = family_function_blocks(&rendered)?;
+        } else {
+            for name in replacements {
+                functions.push_str(&trusted_function(&rendered, name)?);
+                functions.push('\n');
+            }
         }
         if implementation == previous {
             let upgrade = include_str!("m20261008_000400_reader_retention_upgrade.sql")
@@ -601,6 +815,13 @@ async fn upgrade_to(
             return Err(rejected(
                 "reader migration upgraded Q differs from the trusted complete shape",
             ));
+        }
+        // Fail *after* the whole family was installed and verified, so the rollback test proves the
+        // installed DDL is undone. The flag is a per-call argument, not process state, so parallel
+        // test runs cannot inject it into an unrelated upgrade.
+        #[cfg(test)]
+        if fail_after_family_install {
+            return Err(rejected("injected post-install family fault"));
         }
     }
 
@@ -651,4 +872,36 @@ async fn upgrade_to(
         return Err(rejected("reader migration final Q fingerprint changed"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod publication_handoff_anchor {
+    use super::*;
+    use crate::jupiter::storage::qualified_metadata_family::{
+        fingerprint_with_captured_prior_handoff, implementation_fingerprint,
+    };
+
+    /// The anchored landing stamp must be reproducible from the captured pre-FIX-OX-20 serving body
+    /// and must differ from the current revision, so the migration cannot silently anchor itself.
+    #[test]
+    fn prior_landing_stamp_is_reproducible_from_the_capture() {
+        let capture = include_str!("m20261009_000100_previous_publication_handoff_family.sql");
+        assert_eq!(
+            hex::encode(Sha256::digest(capture.as_bytes())),
+            PUBLICATION_HANDOFF_CAPTURE,
+            "the captured prior body changed"
+        );
+        let prior = fingerprint_with_captured_prior_handoff(capture)
+            .expect("the serving revision must declare mst2_metadata_handoff");
+        assert_eq!(
+            hex::encode(prior),
+            PUBLICATION_HANDOFF_PRIOR_IMPLEMENTATION,
+            "the anchored prior stamp must match the recomputed pre-FIX-OX-20 fingerprint"
+        );
+        assert_ne!(
+            prior.to_vec(),
+            implementation_fingerprint(),
+            "the prior stamp must differ from the current revision"
+        );
+    }
 }
