@@ -85,6 +85,15 @@ AC-00..AC-22 等全部 `Lifecycle=done / Acceptance=complete`（每卡字段逐�
 
 ## 四、当前执行指针（next action）
 
+### FIX-OX-22 当前卡审计记录（2026-10-11）
+
+- **状态：`blocked`（机制不足，非实现缺陷）。** 已实现并可编译：`m20261009_000100_upgrade_qualified_publication_handoff`（+ `mod.rs` 双处注册与尾序数组）、`test_upgrade_publication_handoff`、fixture helper `restore_last_landed_reader_family`、引擎 `InstallProfile::PublicationHandoff`。
+- **VER-1 七次失败（均 exit 101）**，错误恒为 `reader migration upgraded Q differs from the trusted complete shape`。已排除：函数替换子集（1/17/全部 105 个函数，含修正 `family_functions` 只识别 `CREATE OR REPLACE FUNCTION` 的解析缺陷）、fixture 取 native-runtime family。
+- **决定性证据：** 为构造真实「上一版已迁移」 fixture（descriptor 修复后的 family + 上一版 compiled 指纹），回写旧指纹被 schema 自身拒绝——`mst2_qualified_family_policy_implementation_fingerprint_check`（拒绝伪造指纹）与 `mst2_metadata_dml_barrier`（`qualified mutation requires its captured primary family and READ COMMITTED`）。这与既有 fail-closed 断言一致：prior 指纹不可伪造，故该 fixture 只能来自引擎新增的 prior-render 变体。
+- **后续：** 引擎支持登记为 `DEFER-OX-12`（open，owner：计划维护者）；FIX-OX-22 保持 `blocked`。按其依赖，FIX-OX-06 及其后继同样受阻，需先决定 `DEFER-OX-12` 或改接依赖。
+- 工作树已按 fail-closed 回滚（未注册任何未验证 migration），`cargo build` 绿。无版本 bump、无 tag、无 Release、无提交。
+- ER-05：未开始（实现未达可审状态）。
+
 ### FIX-OX-20 当前卡审计记录（2026-10-11）
 
 - **交付：** handoff 竞争 raise 增加 `USING ERRCODE = '40001'`；`qualified_metadata_rooted.rs::database_error` 仅对 40001 映射为 `SnapshotNotReady`（503、retryable），其余 DB 错误仍 500 fail-closed；同用例内过期的 38 键观测断言改为 rooted 契约（phase/26 键/`rooted_work` 24 键）。写集修订加入 `qualified_metadata_rooted.rs`。
@@ -185,6 +194,7 @@ AC-00..AC-22 等全部 `Lifecycle=done / Acceptance=complete`（每卡字段逐�
 | 计划 | DEFER ID | 内容 | owner / 关闭条件 | 状态 |
 |---|---|---|---|---|
 | plan-20260920 | `DEFER-OX-11` | `FIX-OX-19`、`FIX-OX-21` 在 FIX-OX-23 分支 2 后保持 `blocked`，已按本行正式延后并**移出 `REL-OX-01`**（成员数 304→302）；`FIX-OX-20` 依赖改接 `FIX-OX-23`，串行链恢复 | owner：计划维护者（OX-284 执行者 `genedna` 在最终 C 复核）。**重启（解除延后）条件：** 可复现的 anchor mismatch（运行不得以 `LEASE_EXPIRED` 结束、须复现该精确 guard 错误并附脱敏 500、记录源码 SHA-256 与一次 `libra status` 抓取）＋按 FIX-OX-04 AC-3/AC-4 登记新卡＋literal ER-05 `VERDICT: PASS`＋新 migration 排在最后一个已落地 fingerprint migration 之后；在 OX-284 前重启须以 `plan release child` 重新加入 `REL-OX-01`，之后重启须另建计划。**承接位置：** 本文件 5.3 + `plan-20260920.md` FIX-OX-19/21 卡 | 延后（open） |
+| plan-20260920 | `DEFER-OX-12` | 迁移引擎需支持「descriptor 修复后的 prior render + 合法 stamp 上一版指纹」，否则 FIX-OX-22 无法构造「上一版已迁移」fixture（schema 禁止伪造 prior 指纹） | owner：计划维护者；**关闭条件：** 引擎新增 prior-render/stamp 变体并按 ER-03 登记的具名卡交付且经 ER-05 PASS，随后重启 FIX-OX-22 | 延后（open） |
 | plan-20260920 | `DEFER-OX-10` | 发布启用夹具下延迟的**来源未判定**：FIX-OX-18 实测的 rooted 屏障前 3.8–5.5 s，以及 FIX-OX-17 记录的 raw-blob `oneshot` 约 9–10 s（生产特性 vs 测试环境特性，例如共享库 schema 数量） | owner：`genedna`（OX-284 执行者），在其最终 C 的完整串行 readiness 期间完成；**关闭条件：**给出归因结论（生产 or 环境）并在 `plan-status` 更新本行；**承接位置：** `docs/plan/plan-20260920.md` §执行证据/`#### FIX-OX-18 证据` + §五 5.3 | 延后（open） |
 
 ### 5.2 具体承接与在途 DEFER（重要项）
