@@ -90,20 +90,20 @@ AC-00..AC-22 等全部 `Lifecycle=done / Acceptance=complete`（每卡字段逐�
 - **交付与分支：** 按卡文本只改 `snapshot_reader_retention_tests.rs` 中 `committed_metadata_requests_retire_owners_without_retiring_source_history` 的 fixture 调用点，显式请求 3600 s test-only lease；不改生产 lease expiry、SQL、anchor guard 或共享 fixture constructor（A→B diff SHA-256 `b5d1e136c929c08b865b9d90272c1f7c80ad4f17c43c5284043beef7515d5427` 记录于 `plan-20260920.md` §执行证据/`#### FIX-OX-23 证据`；树级抓取显示当时仅 3 条脏路径，无生产文件改动）。
 - **A/B 原始结果：** A（原 `Fixture::new_with_pg_config(true)`）exit **101**、614.82 s、panic 于 `snapshot_content_tests.rs:1111:5`，错误 `LEASE_EXPIRED`（96 次未走完）；B exit **0**、847.85 s（最终提交字节）、`1 passed; 0 failed`，96 次 lookup 全部完成且全部断言通过。**判定分支 2。**
 - **结论：** 历史 production anchor root 未获证实；FIX-OX-19 与 FIX-OX-21 **保持 blocked**，不得据此实施 reader lifecycle/anchors SQL 修复；重新开卡需先给出新的可复现根因证据（按 FIX-OX-04 AC-3/AC-4 登记并经 Claude 复审）。
-- **AC-4 要求的计划修订：** 已在 `plan-20260920.md` 落地——FIX-OX-19、FIX-OX-21 各加 2026-10-11 修订段（`blocked` + 依赖「当前不可满足」+ FIX-OX-21 重启条件）、FIX-OX-04 分类表该用例两行的更新、`实施顺序` 三处链的暂停标注、`修订历史` 5 列新行，并在本文件 §5.3 登记 `DEFER-OX-02`（REL-OX-01 处置）；本修订待 Claude 复审后提交与 Push。
+- **AC-4 要求的计划修订：** 已在 `plan-20260920.md` 落地——FIX-OX-19、FIX-OX-21 各加 2026-10-11 修订段（`blocked` + 依赖「当前不可满足」+ FIX-OX-21 重启条件）、FIX-OX-04 分类表该用例两行的更新、`实施顺序` 三处链的暂停标注（**已于 2026-10-11 由 `DEFER-OX-11` 修订解除**）、`修订历史` 5 列新行，并在本文件 §5.3 登记 `DEFER-OX-11`（REL-OX-01 处置）；该卡片与台账已提交 `49e49df`/`7560e3c` 并 Push。
 - 提交状态：已提交 `49e49df4976f` 并 Push 到 `origin/main`（round-9 literal PASS 后）。无版本 bump、无 tag、无 Release。
-- ER-05：round 1–8 均 literal `VERDICT: FAIL`（逐轮收敛），round 9 literal `VERDICT: PASS`（report SHA `2ad966f4e101f78318bb6473d2669b7aa0e875f25d4025ef7b2cc006a55b289e`；无 P0/P1，剩余 P2/P3 非阻断）；AC-4 的「经 Claude 复审的计划修订」已满足，本卡据此提交与 Push。
+- ER-05：round 1–8 均 literal `VERDICT: FAIL`（逐轮收敛），round 9 literal `VERDICT: PASS`（report SHA `fae46c9493c624a8…`）。**option A 计划修订的 ER-05：** literal `VERDICT: PASS`（report SHA `fae46c9493c624a86b14fc0116fb0fd511d1e17548c16fe59ac5c44d232c6dbc`；无 P0/P1 在修订范围内；报告另记一项 OX-284 既有 P1，属修订范围外、先于本次修订存在）。
 
 ### FIX-OX-18 当前卡审计记录（2026-10-11）
 
 - **交付（round 2 最终）：** `snapshot_rooted_metadata_tests.rs` 8 处 + `snapshot_reader_retention_tests.rs` 2 处固定 4 s 等待改为 60 s；断言不变；**无生产文件改动**（`qualified_metadata_reader.rs` 未改，未新增 hook）；`libra diff --stat -- src` 仅两个测试文件（10 insertions / 10 deletions）。B 树哈希：rooted `0fcfe255…`、retention `dcdada0b…`。越界改动（lease 用例的 4 s fail-fast bound）已撤回，该用例另跑一次 exit 0（31.88 s）。
 - **实测归因：** 临时插桩测得时间到 admission 为 5,512 / 3,801 / 4,237 ms（三个用例各一次）——原 4 s 界恰好落在实测延迟上，故同一用例通过/失败交替，与卡文本「focused 重跑有通过与失败」一致。60 s 提供 11–16 倍余量。
 - **VER（B，60 s，连续三次）：** VER-1 `exit 0/0/0`（28.07 / 27.50 / 28.28 s）；VER-2 `exit 0/0/0`（26.18 / 27.73 / 26.52 s）；VER-3 `exit 0/0/0`（50.08 / 50.75 / 47.01 s）；VER-4 `exit 0/0/0`（28.59 / 27.87 / 26.75 s）。基线（A，4 s）单次：VER-1/VER-2/VER-4 均 exit 101 且 panic 为 `Elapsed(())`（25.32 / 25.13 / 26.70 s，位置 `:642:10`、`:560:10`、`retention:276:10`），VER-3 exit 0（44.40 s）。
-- **未决项 `DEFER-OX-01`：** 准入前延迟 3.8–5.5 s 的来源未判定（生产特性 vs 测试环境特性，例如共享库 schema 数量）；owner 为 OX-284 最终 C，须在最终 C 前完成归因，在此之前只登记为「候选生产特性」。该登记覆盖两处延迟来源：本卡实测的 3.8–5.5 s rooted 准入前延迟，以及 FIX-OX-17 记录的发布启用 raw-blob `oneshot` 约 9–10 s；两者均**未判定**来源。执行归因的责任人是 OX-284 的执行者 `genedna`（在其最终 C 的完整串行 readiness 期间完成），而非把归因推给「OX-284」这一发布点本身。
+- **未决项 `DEFER-OX-10`：** 准入前延迟 3.8–5.5 s 的来源未判定（生产特性 vs 测试环境特性，例如共享库 schema 数量）；owner 为 OX-284 最终 C，须在最终 C 前完成归因，在此之前只登记为「候选生产特性」。该登记覆盖两处延迟来源：本卡实测的 3.8–5.5 s rooted 准入前延迟，以及 FIX-OX-17 记录的发布启用 raw-blob `oneshot` 约 9–10 s；两者均**未判定**来源。执行归因的责任人是 OX-284 的执行者 `genedna`（在其最终 C 的完整串行 readiness 期间完成），而非把归因推给「OX-284」这一发布点本身。
 - 卡级 `cargo +nightly fmt --all --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo build`、`cargo build --tests` 均 exit 0（两处既有 macOS `__eh_frame` 警告归 OX-284 最终 C）。仓库级 `cargo test --all` 仍由 OX-284 最终 C 承担。
 - 提交状态：已提交 `fb2ec1d0f063c2c76fd06a991e2e636466592b00` 并 Push 到 `origin/main`（ER-05 round-4 literal PASS 后）。无版本 bump、无 tag、无 Release。
 - 证据：本卡记录已内联于 `plan-20260920.md` §执行证据/`#### FIX-OX-18 证据`；原始日志未入库，其哈希在记录中标注为无法复核。
-- ER-05：round 1 literal `VERDICT: FAIL`（P1-1 根因过度宣称且未解决 FIX-OX-17 交接、P1-2 越界改动削弱无关 fail-fast 测试；P2-1..P2-5；P3-1..P3-5）；round-2 修订已落地（撤回越界改动、界改 60 s、实测延迟、补齐 Q5 最低要求、AC 按实际断言改写、卡文本修订、`DEFER-OX-01` 登记）。round 2 literal `VERDICT: FAIL`（per-run 工件仍为 round-1 运行、fmt 退出码为空）；round 3 literal `VERDICT: FAIL`（fmt 退出码仍空、卡字段未改、交接范围未述、AC-3 未满足、审阅状态滞后）；round 4 literal `VERDICT: PASS`（report SHA `74307bf3a2da97bb61bf6477ec466a54630a509a8b7a3f05d83d8a1d23a833b1`；snapshot manifest SHA `869a3c6c001986f681e8adbf1543c2762d15e39b4113bb35cdec8abf2c8abf72`），条件（记录本 verdict、C 前关闭 P2）已落地；已在 `fb2ec1d` 提交并 Push。
+- ER-05：round 1 literal `VERDICT: FAIL`（P1-1 根因过度宣称且未解决 FIX-OX-17 交接、P1-2 越界改动削弱无关 fail-fast 测试；P2-1..P2-5；P3-1..P3-5）；round-2 修订已落地（撤回越界改动、界改 60 s、实测延迟、补齐 Q5 最低要求、AC 按实际断言改写、卡文本修订、`DEFER-OX-10` 登记）。round 2 literal `VERDICT: FAIL`（per-run 工件仍为 round-1 运行、fmt 退出码为空）；round 3 literal `VERDICT: FAIL`（fmt 退出码仍空、卡字段未改、交接范围未述、AC-3 未满足、审阅状态滞后）；round 4 literal `VERDICT: PASS`（report SHA `74307bf3a2da97bb61bf6477ec466a54630a509a8b7a3f05d83d8a1d23a833b1`；snapshot manifest SHA `869a3c6c001986f681e8adbf1543c2762d15e39b4113bb35cdec8abf2c8abf72`），条件（记录本 verdict、C 前关闭 P2）已落地；已在 `fb2ec1d` 提交并 Push。
 
 ### FIX-OX-17 当前卡审计记录（2026-10-11）
 
@@ -172,10 +172,12 @@ AC-00..AC-22 等全部 `Lifecycle=done / Acceptance=complete`（每卡字段逐�
 
 ### 5.3 plan-20260920 在途 DEFER
 
+> **编号重编记录（2026-10-11）：** `49e49df` 曾把本计划的延迟归因与 FIX-OX-19/21 延后登记为 `DEFER-OX-01`、`DEFER-OX-02`，与计划自有的 `DEFER-OX-02`（旧 `v0.42.25` 镜像债务）冲突。按模板「废弃的编号保留并标记替代关系」，两者已重编为 **`DEFER-OX-10`**（延迟归因）与 **`DEFER-OX-11`**（FIX-OX-19/21 延后）；此处不再以表格 ID 复用旧编号。
+
 | 计划 | DEFER ID | 内容 | owner / 关闭条件 | 状态 |
 |---|---|---|---|---|
-| plan-20260920 | `DEFER-OX-02` | FIX-OX-19/FIX-OX-21 在 FIX-OX-23 分支 2 后保持 `blocked`，前置条件当前不可满足 | owner：计划维护者；**关闭条件：** 要么按 FIX-OX-04 AC-3/AC-4 登记新的可复现根因卡并经 Claude 复审后重启二者，要么在 OX-284 前把它们从 `REL-OX-01` 正式延后/移出；**承接位置：** 本文件 5.3 + `plan-20260920.md` FIX-OX-19/21 卡 | 延后（open） |
-| plan-20260920 | `DEFER-OX-01` | 发布启用夹具下延迟的**来源未判定**：FIX-OX-18 实测的 rooted 屏障前 3.8–5.5 s，以及 FIX-OX-17 记录的 raw-blob `oneshot` 约 9–10 s（生产特性 vs 测试环境特性，例如共享库 schema 数量） | owner：`genedna`（OX-284 执行者），在其最终 C 的完整串行 readiness 期间完成；**关闭条件：**给出归因结论（生产 or 环境）并在 `plan-status` 更新本行；**承接位置：** `docs/plan/plan-20260920.md` §执行证据/`#### FIX-OX-18 证据` + §五 5.3 | 延后（open） |
+| plan-20260920 | `DEFER-OX-11` | `FIX-OX-19`、`FIX-OX-21` 在 FIX-OX-23 分支 2 后保持 `blocked`，已按本行正式延后并**移出 `REL-OX-01`**（成员数 304→302）；`FIX-OX-20` 依赖改接 `FIX-OX-23`，串行链恢复 | owner：计划维护者（OX-284 执行者 `genedna` 在最终 C 复核）。**重启（解除延后）条件：** 可复现的 anchor mismatch（运行不得以 `LEASE_EXPIRED` 结束、须复现该精确 guard 错误并附脱敏 500、记录源码 SHA-256 与一次 `libra status` 抓取）＋按 FIX-OX-04 AC-3/AC-4 登记新卡＋literal ER-05 `VERDICT: PASS`＋新 migration 排在最后一个已落地 fingerprint migration 之后；在 OX-284 前重启须以 `plan release child` 重新加入 `REL-OX-01`，之后重启须另建计划。**承接位置：** 本文件 5.3 + `plan-20260920.md` FIX-OX-19/21 卡 | 延后（open） |
+| plan-20260920 | `DEFER-OX-10` | 发布启用夹具下延迟的**来源未判定**：FIX-OX-18 实测的 rooted 屏障前 3.8–5.5 s，以及 FIX-OX-17 记录的 raw-blob `oneshot` 约 9–10 s（生产特性 vs 测试环境特性，例如共享库 schema 数量） | owner：`genedna`（OX-284 执行者），在其最终 C 的完整串行 readiness 期间完成；**关闭条件：**给出归因结论（生产 or 环境）并在 `plan-status` 更新本行；**承接位置：** `docs/plan/plan-20260920.md` §执行证据/`#### FIX-OX-18 证据` + §五 5.3 | 延后（open） |
 
 ### 5.2 具体承接与在途 DEFER（重要项）
 

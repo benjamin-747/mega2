@@ -1,0 +1,25 @@
+FIX-OX-19/21 deferral amendment — guard sweep and tree capture (2026-10-11)
+
+Deferral id used: DEFER-OX-11 (plan's own ids DEFER-OX-02/03 untouched)
+
+[304] total hits 60; membership/count hits 14
+samples:
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-status.md:177:| plan-20260920 | `DEFER-OX-11` | `FIX-OX-19`、`FIX-OX-21` 在 FIX-OX
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-20260920.md:200:| REL-OX-01 | implementation/migration/removal：`FIX-OX-08`、`FIX-
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-20260920.md:6261:### Task OX-304：REL-OX-01 发布成员证据批次 05（audit）
+[196] total hits 20; membership/count hits 0
+[FIX-OX-19] total hits 47; membership/count hits 22
+samples:
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-status.md:93:- **AC-4 要求的计划修订：** 已在 `plan-20260920.md` 落地——FIX-OX-19、FIX-OX-21 各
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-status.md:177:| plan-20260920 | `DEFER-OX-11` | `FIX-OX-19`、`FIX-OX-21` 在 FIX-OX
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-20260920.md:72:| 修订（2026-10-11，FIX-OX-23 分支 2） | FIX-OX-23 的 3600 s test-only le
+[FIX-OX-21] total hits 46; membership/count hits 17
+samples:
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-status.md:93:- **AC-4 要求的计划修订：** 已在 `plan-20260920.md` 落地——FIX-OX-19、FIX-OX-21 各
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-status.md:177:| plan-20260920 | `DEFER-OX-11` | `FIX-OX-19`、`FIX-OX-21` 在 FIX-OX
+  /Volumes/Data/GitMono/mega2-plan-20260920-exec-81f2e5c/docs/plan/plan-20260920.md:72:| 修订（2026-10-11，FIX-OX-23 分支 2） | FIX-OX-23 的 3600 s test-only le
+
+libra status --short --branch:
+## main...origin/main
+ M docs/plan/plan-20260920.md
+ M docs/plan/plan-status.md
