@@ -6,6 +6,7 @@ use serde_json::json;
 
 use super::*;
 use crate::ceres::snapshot::{
+    error::SnapshotErrorCode,
     metadata_install::MetadataInstallIdentity,
     rooted_metadata_install::{RootedMetadataInstallPlan, RootedReuseRoot},
     rooted_metadata_projection::{CertifiedReusableDirectory, RootedReuseLookup},
@@ -161,27 +162,45 @@ fn internal(error: impl std::fmt::Display) -> SnapshotError {
         error.to_string(),
     )
 }
-pub(super) fn is_lock_unavailable(error: &sea_orm::DbErr) -> bool {
+pub(super) fn sqlstate(error: &sea_orm::DbErr) -> Option<String> {
     let runtime = match error {
         sea_orm::DbErr::Exec(runtime) | sea_orm::DbErr::Query(runtime) => runtime,
-        _ => return false,
+        _ => return None,
     };
     let sea_orm::RuntimeErr::SqlxError(sqlx_error) = runtime else {
-        return false;
+        return None;
     };
     let sea_orm::sqlx::Error::Database(database_error) = sqlx_error.as_ref() else {
-        return false;
+        return None;
     };
-    database_error.code().as_deref() == Some("55P03")
+    database_error.code().map(|code| code.into_owned())
+}
+pub(super) fn is_lock_unavailable(error: &sea_orm::DbErr) -> bool {
+    sqlstate(error).as_deref() == Some("55P03")
+}
+/// SQLSTATE-only classification of the qualified serving failures that are retryable by
+/// contract. Every other code (including the deterministic P0001 integrity raises) is not
+/// classified here and falls through to `internal`.
+fn retryable_sqlstate(code: &str) -> Option<SnapshotErrorCode> {
+    match code {
+        "55P03" => Some(SnapshotErrorCode::TemporaryUnavailable),
+        // 40001: the observed publication moved between capture and handoff.
+        "40001" => Some(SnapshotErrorCode::SnapshotNotReady),
+        _ => None,
+    }
 }
 fn database_error(error: sea_orm::DbErr) -> SnapshotError {
-    if is_lock_unavailable(&error) {
-        return SnapshotError::new(
-            crate::ceres::snapshot::error::SnapshotErrorCode::TemporaryUnavailable,
+    match sqlstate(&error).as_deref().and_then(retryable_sqlstate) {
+        Some(SnapshotErrorCode::TemporaryUnavailable) => SnapshotError::new(
+            SnapshotErrorCode::TemporaryUnavailable,
             "qualified source is being updated; retry the operation",
-        );
+        ),
+        Some(code) => SnapshotError::new(
+            code,
+            "publication changed while the handoff was captured; retry resolve",
+        ),
+        None => internal(error),
     }
-    internal(error)
 }
 fn integrity(message: &str) -> SnapshotError {
     SnapshotError::new(
@@ -762,5 +781,29 @@ impl RootedQualifiedMetadataRepository {
         };
         txn.commit().await.map_err(internal)?;
         Ok(receipt)
+    }
+}
+
+#[cfg(test)]
+mod mapper_tests {
+    use super::*;
+
+    #[test]
+    fn retryable_sqlstate_only_classifies_the_two_contract_failures() {
+        assert_eq!(
+            retryable_sqlstate("55P03"),
+            Some(SnapshotErrorCode::TemporaryUnavailable)
+        );
+        assert_eq!(
+            retryable_sqlstate("40001"),
+            Some(SnapshotErrorCode::SnapshotNotReady)
+        );
+        for code in ["P0001", "23505", "42P01", "57014", ""] {
+            assert_eq!(
+                retryable_sqlstate(code),
+                None,
+                "{code} must stay fail closed"
+            );
+        }
     }
 }

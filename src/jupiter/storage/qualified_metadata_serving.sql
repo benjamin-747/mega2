@@ -360,10 +360,14 @@ BEGIN
   PERFORM mst2_metadata_cleanup_expired(64);
   now_unix:=floor(extract(epoch FROM clock_timestamp()))::bigint;
   deadline:=now_unix+least(3600,greatest(1,(request->>'lease_seconds')::bigint));
-  IF request->>'authorization_epoch' IS DISTINCT FROM '1' OR lid IS NULL OR inc IS NULL OR descriptor IS NULL
-    OR NOT mst2_metadata_publication_valid(instance,commit_id,tree_id,(request->>'publication_sequence')::bigint,
+  IF request->>'authorization_epoch' IS DISTINCT FROM '1' OR lid IS NULL OR inc IS NULL OR descriptor IS NULL THEN
+    RAISE EXCEPTION 'qualified handoff request shape or authorization epoch is invalid'; END IF;
+  IF NOT mst2_metadata_publication_valid(instance,commit_id,tree_id,(request->>'publication_sequence')::bigint,
+      (request->>'writer_epoch')::bigint,(request->>'certificate_receipt_id')::bigint,false) THEN
+    RAISE EXCEPTION 'qualified handoff references a publication tuple that was never valid'; END IF;
+  IF NOT mst2_metadata_publication_valid(instance,commit_id,tree_id,(request->>'publication_sequence')::bigint,
       (request->>'writer_epoch')::bigint,(request->>'certificate_receipt_id')::bigint,true) THEN
-    RAISE EXCEPTION 'qualified handoff differs from the independently observed current publication'; END IF;
+    RAISE EXCEPTION 'qualified handoff differs from the independently observed current publication' USING ERRCODE = '40001'; END IF;
   SELECT * INTO s FROM mst2_qualified_session_incarnation WHERE snapshot_id=sid AND state='READY';
   IF FOUND THEN
     IF s.state<>'READY' OR s.canonical_descriptor IS DISTINCT FROM descriptor OR s.instance_id IS DISTINCT FROM instance

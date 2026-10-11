@@ -387,7 +387,16 @@ async fn http_resolve_captured_before_commit_never_mixes_new_sequence_with_old_d
         for (record,observation) in [(&records[0],&first_observations[0]),(&records[2],&next_observations[0])] {
             let typed=serde_json::to_value(observation.wire_record()).unwrap();
             assert_eq!(record["payload"],typed,"writer must preserve the full validated operation tuple");
-            assert_eq!(record["payload"].as_object().unwrap().len(),38);
+            // FIX-OX-20: this fixture resolves the rooted family, whose wire record keeps its
+            // 24-field rooted work tuple nested (25 base fields + `rooted_work` = 26 top-level
+            // keys). The previous 38 assertion matches the *generic* shape (25 base + 13
+            // flattened `ProjectionWork` fields) and never applied to a `resolve_rooted_projection`
+            // observation. Assert the rooted contract instead of the generic count.
+            let payload = record["payload"].as_object().unwrap();
+            assert_eq!(payload["phase"], "resolve_rooted_projection");
+            assert_eq!(payload.len(), 26);
+            assert_eq!(payload["rooted_work"].as_object().unwrap().len(), 24);
+            assert!(payload.get("work").is_none());
         }
         assert_ne!(records[0]["payload"]["request_id"],records[2]["payload"]["request_id"]);
         let status:serde_json::Value=serde_json::from_slice(&std::fs::read(directory.join("status.json")).unwrap()).unwrap();

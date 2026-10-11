@@ -85,6 +85,14 @@ AC-00..AC-22 等全部 `Lifecycle=done / Acceptance=complete`（每卡字段逐�
 
 ## 四、当前执行指针（next action）
 
+### FIX-OX-20 当前卡审计记录（2026-10-11）
+
+- **交付：** handoff 竞争 raise 增加 `USING ERRCODE = '40001'`；`qualified_metadata_rooted.rs::database_error` 仅对 40001 映射为 `SnapshotNotReady`（503、retryable），其余 DB 错误仍 500 fail-closed；同用例内过期的 38 键观测断言改为 rooted 契约（phase/26 键/`rooted_work` 24 键）。写集修订加入 `qualified_metadata_rooted.rs`。
+- **A/B：** A（HEAD）exit **101**（29.36 s，`:345` 收到 500 `INTERNAL` 而非 503）；B exit **0**（43.25 s，`1 passed; 0 failed`）。证据内联于 `plan-20260920.md` §执行证据/`#### FIX-OX-20 证据`。
+- **门禁：** fmt/clippy/`cargo build`/`cargo build --tests` 均 exit 0（既有 macOS `__eh_frame` 警告归 OX-284 最终 C）。指纹变更由 FIX-OX-22 前滚。
+- 提交状态：未提交、未推送（待 ER-05）。无版本 bump、无 tag、无 Release。
+- ER-05：round 1 literal `VERDICT: FAIL`（P1-1..P1-4 + P2/P3）；round-2 修订已落地（split raise、AC 修订、SQLSTATE 单元测试、provenance、指纹校验），round 2 审阅中。
+
 ### FIX-OX-23 当前卡审计记录（2026-10-11）
 
 - **交付与分支：** 按卡文本只改 `snapshot_reader_retention_tests.rs` 中 `committed_metadata_requests_retire_owners_without_retiring_source_history` 的 fixture 调用点，显式请求 3600 s test-only lease；不改生产 lease expiry、SQL、anchor guard 或共享 fixture constructor（A→B diff SHA-256 `b5d1e136c929c08b865b9d90272c1f7c80ad4f17c43c5284043beef7515d5427` 记录于 `plan-20260920.md` §执行证据/`#### FIX-OX-23 证据`；树级抓取显示当时仅 3 条脏路径，无生产文件改动）。
