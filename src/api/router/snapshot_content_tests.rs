@@ -1132,6 +1132,43 @@ async fn error(response: Response, status: u16, code: &str, retryable: bool) {
     assert_eq!(value["error"]["request_id"], request_id);
 }
 
+/// FIX-OX-06 AC-3/VER-3: when the shared `error()` helper receives a response that does not match
+/// the expected status, its diagnostic must name the actual response error code and message, so a
+/// mismatched expectation is diagnosable from the panic alone. The fixture body carries no
+/// credentials, and the helper only echoes the response's own code/message fields.
+#[tokio::test]
+async fn error_helper_mismatch_reports_code_and_message() {
+    let body = serde_json::json!({
+        "error": {
+            "code": "INTEGRITY_ERROR",
+            "message": "qualified catalog drift",
+            "retryable": false,
+            "request_id": "req-mismatch",
+        }
+    });
+    let response = Response::builder()
+        .status(502)
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-mismatch")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+
+    let panic = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(error(
+        response, 200, "OK", false,
+    )))
+    .await
+    .expect_err("a status mismatch must panic");
+    let text = panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|text| text.to_string()))
+        .unwrap_or_default();
+    assert!(
+        text.contains("INTEGRITY_ERROR") && text.contains("qualified catalog drift"),
+        "the mismatch diagnostic must name the response code and message: {text}"
+    );
+}
+
 #[tokio::test]
 async fn mst2_rooted_streamed_fact_persists_one_source_pass_and_reuses_warm_alias_facts() {
     use crate::ceres::snapshot::rooted_metadata_projection::prepare_rooted_native_metadata;
