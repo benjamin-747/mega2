@@ -122,6 +122,9 @@ AC-00..AC-22 等全部 `Lifecycle=done / Acceptance=complete`（每卡字段逐�
 - 证据：本卡记录已内联于 `plan-20260920.md` §执行证据/`#### FIX-OX-18 证据`；原始日志未入库，其哈希在记录中标注为无法复核。
 - ER-05：round 1 literal `VERDICT: FAIL`（P1-1 根因过度宣称且未解决 FIX-OX-17 交接、P1-2 越界改动削弱无关 fail-fast 测试；P2-1..P2-5；P3-1..P3-5）；round-2 修订已落地（撤回越界改动、界改 60 s、实测延迟、补齐 Q5 最低要求、AC 按实际断言改写、卡文本修订、`DEFER-OX-10` 登记）。round 2 literal `VERDICT: FAIL`（per-run 工件仍为 round-1 运行、fmt 退出码为空）；round 3 literal `VERDICT: FAIL`（fmt 退出码仍空、卡字段未改、交接范围未述、AC-3 未满足、审阅状态滞后）；round 4 literal `VERDICT: PASS`（report SHA `74307bf3a2da97bb61bf6477ec466a54630a509a8b7a3f05d83d8a1d23a833b1`；snapshot manifest SHA `869a3c6c001986f681e8adbf1543c2762d15e39b4113bb35cdec8abf2c8abf72`），条件（记录本 verdict、C 前关闭 P2）已落地；已在 `fb2ec1d` 提交并 Push。
 
+
+- **FIX-OX-03（本地 readiness 审计）状态：`blocked`（2026-10-11）:** AC-6 默认并行 `cargo test --all` 实测 2433 passed / 34 failed / 3 ignored（4991.79s，exit=101），未达零失败；34 项已逐项按 panic 文本归因（12×`Elapsed(())`、7×`LeaseExpired`、5×`TEMPORARY_UNAVAILABLE`、2×无消息断言、2×`42P01`、2×`40P01`、1×`LEASE_EXPIRED`、1×`INTERNAL`、1×`55P03`、1×`OBJECT_UNAVAILABLE`），全部落在串行通过的模块内（串行反证：bounded_objects 13、persisted_chunk_maps 18、raw_blob 13、chunk_map_retention 16、bounded_chunks 3、rooted_wide_directory 1、qualified_metadata_family 29、reader_retention 21、mst2_fixed_* 11，另加 3 项定点复跑）。新根因已按计划规则登记具名卡 `FIX-OX-25`（默认并行套件共享态隔离，deps=FIX-OX-10），依赖链改为 `FIX-OX-10 → FIX-OX-25 → FIX-OX-03`，`REL-OX-01` 成员表并入该卡（194→195 / 302→303）。ER-05 round-4 literal `VERDICT: PASS`（report SHA `e1465011c3cfce01f41e3695368d493e766624023aad2be504ae4654178c39e5`）。AC-5（完整串行门）待 `FIX-OX-25` 落地后与 AC-6 一并在同一副本执行。**产品卡与 OX-284 bump 在 FIX-OX-25 完成前不得开工。**
+
 ### FIX-OX-17 当前卡审计记录（2026-10-11）
 
 - **交付形态：复现失败 → 测试侧屏障修复（卡文本的“任一失败则继续调查，不得用空 diff 关闭失败”分支）。** 卡文本 `Current evidence` 只允许“三次连续通过且无本卡 source hunk”时按空代码差异收口；实际三次连续基线运行未全通过，故不走 AC-5。
