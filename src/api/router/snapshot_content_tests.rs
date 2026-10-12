@@ -1070,7 +1070,7 @@ impl Fixture {
         // (503 TEMPORARY_UNAVAILABLE from the mapped 55P03/40001) with the shared bounded retry.
         // Every test that fetches a map through this helper benefits, and no assertion changes.
         success_json(
-            self.send_retrying("GET", &format!("chunk-map?path={path}"), || Body::empty())
+            self.send_retrying("GET", &format!("chunk-map?path={path}"), Body::empty)
                 .await,
         )
         .await

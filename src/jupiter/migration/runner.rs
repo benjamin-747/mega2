@@ -5,16 +5,59 @@ use tracing::log;
 use super::Migrator;
 use crate::common::errors::MegaError;
 
+/// True when a SeaORM migration error is a Postgres deadlock (`40P01`) or a
+/// lock-not-available (`55P03`) that is safe to retry after a short backoff.
+/// FIX-OX-26: concurrent test schemas run DDL (qualified-family upgrade and
+/// related `ALTER TABLE ... LOCK ... IN ACCESS EXCLUSIVE MODE`) against
+/// database-level advisory locks; when two builders interleave table-lock and
+/// advisory-lock acquisition in opposite order, Postgres aborts one with
+/// `deadlock detected` (40P01) or `lock_not_available` (55P03). Each migration
+/// runs in its own transaction, so retrying the whole `Migrator::up` is
+/// idempotent and does not weaken any assertion or skip a migration.
+fn migration_retryable(e: &sea_orm::DbErr) -> bool {
+    let text = format!("{e:?}").to_ascii_lowercase();
+    text.contains("40p01")
+        || text.contains("deadlock detected")
+        || text.contains("55p03")
+        || text.contains("lock_not_available")
+        || text.contains("lock not available")
+}
+
 /// Applies database migrations to the given database connection.
-pub async fn apply_migrations(db: &DatabaseConnection, refresh: bool) -> Result<(), MegaError> {
+///
+/// FIX-OX-26: under the default-parallel test suite multiple schemas bootstrap
+/// concurrently. A rare advisory-lock/DDL lock-order inversion makes one
+/// migration abort with `40P01`/`55P03`; this retries the whole apply a small
+/// bounded number of times (each migration is its own committed transaction) so
+/// the suite does not flake while still failing closed on real errors.
+async fn apply_migrations_inner(db: &DatabaseConnection, refresh: bool) -> Result<(), MegaError> {
     match refresh {
         true => Migrator::refresh(db).await,
         false => Migrator::up(db, None).await,
     }
     .map_err(|e| {
         log::error!("Failed to apply migrations: {e}");
-        e.into()
+        MegaError::Db(e)
     })
+}
+
+pub async fn apply_migrations(db: &DatabaseConnection, refresh: bool) -> Result<(), MegaError> {
+    const ATTEMPTS: u32 = 5;
+    for attempt in 0..ATTEMPTS {
+        match apply_migrations_inner(db, refresh).await {
+            Ok(()) => return Ok(()),
+            Err(MegaError::Db(e)) if migration_retryable(&e) && attempt + 1 < ATTEMPTS => {
+                log::warn!(
+                    "Migration apply hit retryable {e}; retry {}/{} after 250 ms",
+                    attempt + 1,
+                    ATTEMPTS - 1
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            Err(other) => return Err(other),
+        }
+    }
+    unreachable!("bounded retry loop returns or errors inside")
 }
 
 #[cfg(test)]

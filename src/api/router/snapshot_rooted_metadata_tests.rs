@@ -537,7 +537,7 @@ async fn actual_q_body_callers_reject_changed_or_deleted_source_before_opening_a
             .unwrap();
         assert_ne!(source_revision(&fixture, &oid).await, revision);
         let response = fixture
-            .send_retrying("GET", "blob?path=/file", || Body::empty())
+            .send_retrying("GET", "blob?path=/file", Body::empty)
             .await;
         assert!(response.status().is_client_error() || response.status().is_server_error());
         fixture.counts.assert(0, 0);
@@ -799,27 +799,23 @@ async fn actual_q_lease_http_and_direct_handoff_retry_source_lock_without_partia
             format!("/api/v2/snapshots/leases/{}", fixture.lease),
         ),
     ] {
-        let response = tokio::time::timeout(
-            Duration::from_secs(60),
-            retrying(|| {
-                let app = fixture.app.clone();
-                let body = if uri.ends_with("/resolve") {
-                    Body::from(json!({"target":{"kind":"latest"},"scope":"/project"}).to_string())
-                } else {
-                    Body::empty()
-                };
-                let request = Request::builder()
-                    .method(method)
-                    .uri(uri.clone())
-                    .header("authorization", format!("Bearer {TOKEN}"))
-                    .header("content-type", "application/json")
-                    .body(body)
-                    .unwrap();
-                async move { app.oneshot(request).await.unwrap() }
-            }),
-        )
-        .await
-        .unwrap();
+        let app = fixture.app.clone();
+        let body = if uri.ends_with("/resolve") {
+            Body::from(json!({"target":{"kind":"latest"},"scope":"/project"}).to_string())
+        } else {
+            Body::empty()
+        };
+        let request = Request::builder()
+            .method(method)
+            .uri(uri.clone())
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .body(body)
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(60), app.oneshot(request))
+            .await
+            .unwrap()
+            .unwrap();
         error(response, 503, "TEMPORARY_UNAVAILABLE", true).await;
         assert_eq!(durable_lease_state(&fixture).await, before);
     }

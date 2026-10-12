@@ -384,7 +384,7 @@ async fn receipt_orphan_failure_and_cancelled_install_release_owned_credit_and_r
                 .store(true, Ordering::SeqCst);
             error(
                 fixture
-                    .send_retrying("GET", "chunk-map?path=/file", || Body::empty())
+                    .send_retrying("GET", "chunk-map?path=/file", Body::empty)
                     .await,
                 503,
                 "TEMPORARY_UNAVAILABLE",
