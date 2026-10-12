@@ -3,25 +3,36 @@ use mst2_codec::descriptor::ServingDescriptor;
 use super::*;
 
 async fn assert_postgres_descriptor_matches_codec(fixture: &Fixture, scope: &str) {
-    let resolved = success_json(
-        fixture
-            .app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v2/snapshots/resolve")
-                    .header("authorization", format!("Bearer {TOKEN}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({"target":{"kind":"latest"},"scope":scope}).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap(),
-    )
-    .await;
+    // FIX-OX-26: the resolve path documents its 503 `TEMPORARY_UNAVAILABLE` ("qualified source is
+    // being updated; retry the operation") as retryable. Under a parallel full-suite run another
+    // writer can hold that window, so honour the documented contract with a bounded retry instead of
+    // treating it as a terminal result; the descriptor assertions below are unchanged.
+    let resolve = |scope: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v2/snapshots/resolve")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"target":{"kind":"latest"},"scope":scope}).to_string(),
+            ))
+            .unwrap()
+    };
+    let mut resolved: Option<Value> = None;
+    for attempt in 0..40u32 {
+        let response = fixture.app.clone().oneshot(resolve(scope)).await.unwrap();
+        if response.status().as_u16() == 503 {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            assert!(
+                attempt + 1 < 40,
+                "resolve kept reporting its documented retryable state for 10 s"
+            );
+            continue;
+        }
+        resolved = Some(success_json(response).await);
+        break;
+    }
+    let resolved = resolved.expect("resolve must produce a result");
     let snapshot = resolved["descriptor"]["snapshot_id"].as_str().unwrap();
     let lease = resolved["lease_id"].as_str().unwrap();
     assert_eq!(

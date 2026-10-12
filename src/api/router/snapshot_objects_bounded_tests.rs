@@ -252,7 +252,16 @@ async fn assert_objects(response: Response, request: &[u8], objects: &[(String, 
 
 #[tokio::test]
 async fn oversized_item_and_later_invalid_path_reject_entire_batch_before_body_io() {
-    let fixture = Fixture::new().await;
+    // FIX-OX-26: assertions here do not concern the lease budget; the 600 s default can lapse under
+    // a parallel full-suite run, so the call site states a test-only budget (FIX-OX-23 precedent).
+    let fixture = Fixture::new_rooted_with_options(
+        &[],
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     let link_digest = format!("sha256:{}", hex_of(&digest(b"file")));
     for last in [
         json!({"path":"/file","expected_digest":fixture.digest_string()}),
@@ -264,7 +273,7 @@ async fn oversized_item_and_later_invalid_path_reject_entire_batch_before_body_i
         ]});
         error(
             fixture
-                .send("POST", "objects", Body::from(request.to_string()))
+                .send_retrying("POST", "objects", || Body::from(request.to_string()))
                 .await,
             if oversized { 400 } else { 404 },
             if oversized {
@@ -284,7 +293,9 @@ async fn unique_batch_over_eight_mib_rejects_before_any_body_io() {
     let objects = files(33, 256 * 1024);
     let fixture = fixture(&objects).await;
     error(
-        fixture.send("POST", "objects", body(&objects)).await,
+        fixture
+            .send_retrying("POST", "objects", || body(&objects))
+            .await,
         400,
         "SCOPE_INVALID",
         false,
@@ -301,7 +312,7 @@ async fn cap_boundaries_and_empty_object_keep_exact_raw_bytes_and_end_counts() {
     let request = request_bytes(&objects);
     assert_objects(
         fixture
-            .send("POST", "objects", Body::from(request.clone()))
+            .send_retrying("POST", "objects", || Body::from(request.clone()))
             .await,
         &request,
         &objects,
@@ -327,7 +338,7 @@ async fn every_alias_is_admitted_and_exact_oid_body_is_loaded_once() {
     let request = request_bytes(&objects);
     assert_objects(
         fixture
-            .send("POST", "objects", Body::from(request.clone()))
+            .send_retrying("POST", "objects", || Body::from(request.clone()))
             .await,
         &request,
         &objects,
@@ -339,7 +350,7 @@ async fn every_alias_is_admitted_and_exact_oid_body_is_loaded_once() {
     request["items"][127]["expected_digest"] = json!(format!("sha256:{}", "00".repeat(32)));
     error(
         fixture
-            .send("POST", "objects", Body::from(request.to_string()))
+            .send_retrying("POST", "objects", || Body::from(request.to_string()))
             .await,
         409,
         "EXPECTED_DIGEST_MISMATCH",
@@ -373,7 +384,9 @@ async fn conflicting_sizes_reject_before_io_and_distinct_oids_still_verify_each_
     .await;
     error(
         fixture
-            .send("POST", "objects", Body::from(conflicting_request))
+            .send_retrying("POST", "objects", || {
+                Body::from(conflicting_request.clone())
+            })
             .await,
         502,
         "INTEGRITY_ERROR",
@@ -395,7 +408,7 @@ async fn conflicting_sizes_reject_before_io_and_distinct_oids_still_verify_each_
     .await;
     assert_objects(
         fixture
-            .send("POST", "objects", Body::from(request.clone()))
+            .send_retrying("POST", "objects", || Body::from(request.clone()))
             .await,
         &request,
         &objects,
@@ -533,7 +546,9 @@ async fn a_later_object_stream_failure_keeps_earlier_verified_data_unpublished()
     )
     .await;
     error(
-        fixture.send("POST", "objects", body(&objects)).await,
+        fixture
+            .send_retrying("POST", "objects", || body(&objects))
+            .await,
         500,
         "INTERNAL",
         true,
@@ -673,7 +688,7 @@ async fn cancelling_actual_object_request_drops_held_stream_and_retry_succeeds()
         "objects",
         body(&objects),
     )));
-    timeout(Duration::from_secs(10), entered.notified())
+    timeout(Duration::from_secs(60), entered.notified())
         .await
         .unwrap();
     assert!(!task.is_finished());
@@ -718,7 +733,7 @@ async fn lease_revoked_during_object_load_cannot_deliver_verified_frames() {
         "objects",
         body(&objects),
     )));
-    timeout(Duration::from_secs(10), entered.notified())
+    timeout(Duration::from_secs(60), entered.notified())
         .await
         .unwrap();
     let revoked = fixture

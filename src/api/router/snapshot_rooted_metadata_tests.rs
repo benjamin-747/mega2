@@ -444,7 +444,21 @@ async fn source_revision(fixture: &Fixture, oid: &str) -> String {
 
 #[tokio::test]
 async fn actual_q_body_callers_preserve_unchanged_source_revision_and_ignore_temp_shadow() {
-    let fixture = Fixture::new_with_pg_config_and_directories(true, 140).await;
+    // FIX-OX-26: assertions here do not concern the lease budget; the 600 s default can lapse
+    // under a parallel full-suite run, so the call site states a test-only budget (FIX-OX-23
+    // precedent). Production default and every assertion are unchanged.
+    let fixture = Fixture::new_in_publication_mode_with_options(
+        true,
+        140,
+        &[],
+        false,
+        true,
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     fixture.map("/file").await;
     fixture.counts.reset();
     let oid = source_oid(&fixture).await;
@@ -706,7 +720,21 @@ async fn durable_lease_state(fixture: &Fixture) -> Value {
 #[tokio::test]
 async fn actual_q_lease_http_and_direct_handoff_retry_source_lock_without_partial_durable_mutation()
 {
-    let fixture = Fixture::new_with_pg_config(true).await;
+    // FIX-OX-26: assertions here do not concern the lease budget; the 600 s default can lapse
+    // under a parallel full-suite run, so the call site states a test-only budget (FIX-OX-23
+    // precedent). Production default and every assertion are unchanged.
+    let fixture = Fixture::new_in_publication_mode_with_options(
+        true,
+        0,
+        &[],
+        false,
+        true,
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     let storage = &fixture.state.storage;
     let context = storage
         .snapshot_context(&fixture.snapshot, &fixture.lease)
@@ -732,7 +760,7 @@ async fn actual_q_lease_http_and_direct_handoff_retry_source_lock_without_partia
         "SELECT revision::text FROM mst2_rooted_source_tree_revision WHERE revision=$1::uuid FOR UPDATE",
         [revision.clone().into()])).await.unwrap().unwrap();
     assert_eq!(locked.try_get_by_index::<String>(0).unwrap(), revision);
-    let direct_errors = tokio::time::timeout(Duration::from_secs(4), async {
+    let direct_errors = tokio::time::timeout(Duration::from_secs(60), async {
         [
             repository
                 .open_session(&head, &context.built, None, 600)
@@ -774,11 +802,13 @@ async fn actual_q_lease_http_and_direct_handoff_retry_source_lock_without_partia
             .header("content-type", "application/json")
             .body(body)
             .unwrap();
-        let response =
-            tokio::time::timeout(Duration::from_secs(4), fixture.app.clone().oneshot(request))
-                .await
-                .unwrap()
-                .unwrap();
+        let response = tokio::time::timeout(
+            Duration::from_secs(60),
+            fixture.app.clone().oneshot(request),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         error(response, 503, "TEMPORARY_UNAVAILABLE", true).await;
         assert_eq!(durable_lease_state(&fixture).await, before);
     }

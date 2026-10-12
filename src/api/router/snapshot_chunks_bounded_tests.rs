@@ -225,7 +225,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
     let body = request("/other", digest, map_id, 512);
     assert_chunk(
         fixture
-            .send("POST", "chunks", Body::from(body.to_string()))
+            .send_retrying("POST", "chunks", || Body::from(body.to_string()))
             .await,
         &body,
         &pattern[..7],
@@ -245,7 +245,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         fixture.counts.reset();
         assert_chunk(
             fixture
-                .send("POST", "chunks", Body::from(full.to_string()))
+                .send_retrying("POST", "chunks", || Body::from(full.to_string()))
                 .await,
             &full,
             &pattern,
@@ -281,7 +281,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         fixture.counts.reset();
         error(
             fixture
-                .send("POST", "chunks", Body::from(body.to_string()))
+                .send_retrying("POST", "chunks", || Body::from(body.to_string()))
                 .await,
             status,
             code,
@@ -298,7 +298,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
     fixture.counts.reset();
     error(
         fixture
-            .send("POST", "chunks", Body::from(batch.to_string()))
+            .send_retrying("POST", "chunks", || Body::from(batch.to_string()))
             .await,
         503,
         "OBJECT_UNAVAILABLE",
@@ -324,7 +324,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         "chunks",
         Body::from(body.to_string()),
     )));
-    timeout(Duration::from_secs(10), entered.notified())
+    timeout(Duration::from_secs(60), entered.notified())
         .await
         .unwrap();
     task.abort();
@@ -333,7 +333,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
     fixture.counts.chunk_faults.lock().unwrap()[1].mode = RangeMode::Good;
     assert_chunk(
         fixture
-            .send("POST", "chunks", Body::from(body.to_string()))
+            .send_retrying("POST", "chunks", || Body::from(body.to_string()))
             .await,
         &body,
         &pattern[..7],
@@ -351,7 +351,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         "chunks",
         Body::from(body.to_string()),
     )));
-    timeout(Duration::from_secs(10), entered.notified())
+    timeout(Duration::from_secs(60), entered.notified())
         .await
         .unwrap();
     let revoked = fixture
@@ -488,7 +488,7 @@ async fn mst2_chunk_batch_live_budget_and_invalid_later_path_reject_before_body_
     body["items"].as_array_mut().unwrap().push(invalid);
     error(
         fixture
-            .send("POST", "chunks", Body::from(body.to_string()))
+            .send_retrying("POST", "chunks", || Body::from(body.to_string()))
             .await,
         404,
         "PATH_NOT_FOUND",

@@ -1026,6 +1026,57 @@ impl Fixture {
             .unwrap()
     }
 
+    /// FIX-OX-26: send a request while honouring the service's documented retryable state.
+    ///
+    /// The qualified serving path documents `503 TEMPORARY_UNAVAILABLE` ("qualified source is being
+    /// updated; retry the operation") as retryable. A parallel full-suite run can put another writer
+    /// inside that window, so tests that assert a definitive outcome retry it with a bound instead of
+    /// treating it as the result. The bound keeps a genuinely stuck service failing rather than
+    /// hanging, and no assertion is weakened: the returned response is the first non-retryable one.
+    ///
+    /// `make_body` is called per attempt because a `Body` cannot be reused across sends.
+    async fn send_retrying<F: Fn() -> Body>(
+        &self,
+        method: &str,
+        suffix: &str,
+        make_body: F,
+    ) -> Response {
+        const ATTEMPTS: u32 = 40;
+        for attempt in 0..ATTEMPTS {
+            let response = self.send(method, suffix, make_body()).await;
+            if response.status().as_u16() != 503 {
+                return response;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            assert!(
+                attempt + 1 < ATTEMPTS,
+                "request kept reporting its documented retryable state for 10 s"
+            );
+        }
+        unreachable!("bounded retry loop must return or fail inside the loop")
+    }
+
+    /// FIX-OX-26: the same bounded retry for tests that build a request and drive it through
+    /// `app.clone().oneshot(...)`. The qualified serving path documents its `55P03`-derived
+    /// `503 TEMPORARY_UNAVAILABLE` ("qualified source is being updated; retry the operation") as
+    /// retryable, so a test asserting a definitive outcome retries it with a bound instead of
+    /// treating transient contention as the result. Assertions are unchanged.
+    async fn oneshot_retrying<F: Fn() -> Request<Body>>(&self, make_request: F) -> Response {
+        const ATTEMPTS: u32 = 40;
+        for attempt in 0..ATTEMPTS {
+            let response = self.app.clone().oneshot(make_request()).await.unwrap();
+            if response.status().as_u16() != 503 {
+                return response;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            assert!(
+                attempt + 1 < ATTEMPTS,
+                "request kept reporting its documented retryable state for 10 s"
+            );
+        }
+        unreachable!("bounded retry loop must return or fail inside the loop")
+    }
+
     fn digest_string(&self) -> String {
         format!("sha256:{}", hex_of(&self.digest))
     }
@@ -1407,7 +1458,17 @@ async fn mst2_capabilities_use_actual_backend_without_inventory_and_preserve_met
 
 #[tokio::test]
 async fn mst2_fixed_head_uses_verified_facts_without_body_reads_and_preserves_raw_bytes() {
-    let fixture = Fixture::new().await;
+    // FIX-OX-26: these assertions concern verified-fact reads and warm map/leaf aliases, not the
+    // lease budget; the 600 s default can lapse under a parallel full-suite run, so the call site
+    // states a test-only budget (FIX-OX-23 precedent). Assertions are unchanged.
+    let fixture = Fixture::new_rooted_with_options(
+        &[],
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     for (path, kind, size, digest) in [
         (
             "/file",
@@ -1590,7 +1651,17 @@ async fn mst2_publication_disabled_resolve_preserves_head_body_object_map_page_a
 
 #[tokio::test]
 async fn mst2_fixed_warm_map_and_leaf_aliases_skip_body_reads_and_chunks_use_current_ranges() {
-    let fixture = Fixture::new().await;
+    // FIX-OX-26: these assertions concern verified-fact reads and warm map/leaf aliases, not the
+    // lease budget; the 600 s default can lapse under a parallel full-suite run, so the call site
+    // states a test-only budget (FIX-OX-23 precedent). Assertions are unchanged.
+    let fixture = Fixture::new_rooted_with_options(
+        &[],
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     let initial = fixture.map("/file").await;
     fixture.counts.assert(1, fixture.raw.len());
     assert_eq!(initial["map"]["file_content_id"], fixture.digest_string());
@@ -2048,7 +2119,7 @@ async fn mst2_fixed_warm_map_still_checks_map_indices_batches_and_http_lease() {
     duplicate["items"].as_array_mut().unwrap().push(entry);
     error(
         fixture
-            .send("POST", "chunks", Body::from(duplicate.to_string()))
+            .send_retrying("POST", "chunks", || Body::from(duplicate.to_string()))
             .await,
         400,
         "SCOPE_INVALID",

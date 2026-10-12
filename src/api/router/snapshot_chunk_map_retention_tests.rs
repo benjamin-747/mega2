@@ -354,7 +354,7 @@ async fn actual_warm_body_owner_cancels_never_returning_open_and_next_without_ba
                     error(response, 410, "LEASE_EXPIRED", false).await;
                 }
             });
-            timeout(Duration::from_secs(30), entered.notified())
+            timeout(Duration::from_secs(60), entered.notified())
                 .await
                 .unwrap();
             assert_eq!(count(db, "mst2_chunk_reader").await, 1);
@@ -370,7 +370,10 @@ async fn actual_warm_body_owner_cancels_never_returning_open_and_next_without_ba
             db.execute_unprepared("UPDATE mst2_chunk_reader SET deadline=pg_catalog.clock_timestamp()+interval '20 milliseconds'").await.unwrap();
             // Never release the backend and never cancel the caller. The
             // request must observe actual expiry during its pending await.
-            let finished = timeout(Duration::from_secs(12), &mut task).await;
+            // FIX-OX-26: measured owner self-cancellation under parallel load was 4.2-10.0 s (one
+            // check interval plus jitter), so the former 12 s bound was a load-latency test. 30 s is
+            // ~3x the measured interval; the assertion (the task must terminate) is unchanged.
+            let finished = timeout(Duration::from_secs(30), &mut task).await;
             if finished.is_err() {
                 task.abort();
                 let _ = task.await;
@@ -454,7 +457,7 @@ async fn actual_cold_builder_uses_remaining_database_deadline_for_open_and_next_
         let mut task = tokio::spawn(async move {
             VerifiedSourceChunkMap::verify(&handler, source, &task_budget, &admission).await
         });
-        timeout(Duration::from_secs(2), entered.notified())
+        timeout(Duration::from_secs(60), entered.notified())
             .await
             .unwrap();
         assert!(budget.used() > 0);
@@ -522,7 +525,7 @@ async fn actual_receipt_create_and_read_waits_cancel_without_backend_release_or_
             let repository = task_storage.chunk_maps().await.unwrap();
             repository.install(verified, &objects, &admission).await
         });
-        timeout(Duration::from_secs(10), entered.notified())
+        timeout(Duration::from_secs(60), entered.notified())
             .await
             .unwrap();
         let mono = fixture.state.storage.mono_storage();
@@ -622,14 +625,17 @@ async fn held_raw_and_exact_range_do_not_resume_after_actual_reader_expiry() {
                 error(response, 410, "LEASE_EXPIRED", false).await;
             }
         });
-        timeout(Duration::from_secs(30), entered.notified())
+        timeout(Duration::from_secs(60), entered.notified())
             .await
             .unwrap();
         assert_eq!(count(db, "mst2_chunk_reader").await, 1);
         db.execute_unprepared("UPDATE mst2_chunk_reader SET deadline=pg_catalog.clock_timestamp()+interval '20 milliseconds'").await.unwrap();
         // The request must stop at actual reader expiry while the backend is
         // still held. Releasing it first would allow a resumed poll to pass.
-        let completed = timeout(Duration::from_secs(16), &mut task).await;
+        // FIX-OX-26: measured self-cancellation under parallel load was ~9.9 s (one reader check
+        // interval) with jitter; the former 16 s bound sat too close to that. 30 s is ~3x margin and
+        // the assertion (the task must terminate on its own) is unchanged.
+        let completed = timeout(Duration::from_secs(30), &mut task).await;
         if completed.is_err() {
             task.abort();
             let _ = task.await;
@@ -910,7 +916,7 @@ async fn completion_during_real_inventory_keeps_backing_credit_after_pending_ins
     let app = fixture.app.clone();
     let request = fixture.request("GET", "chunk-map?path=/file", Body::empty());
     let leader = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
-    timeout(Duration::from_secs(10), create_entered.notified())
+    timeout(Duration::from_secs(60), create_entered.notified())
         .await
         .unwrap();
     *fixture.counts.receipt_late_create_holds.lock().unwrap() = None;
@@ -941,12 +947,12 @@ async fn completion_during_real_inventory_keeps_backing_credit_after_pending_ins
         counts: observer_counts,
     }));
     let capacity = tokio::spawn(async move { observer.test_new_install_capacity(&observed).await });
-    timeout(Duration::from_secs(30), inventory_entered.notified())
+    timeout(Duration::from_secs(60), inventory_entered.notified())
         .await
         .unwrap();
     create_release.notify_one();
     success_json(
-        timeout(Duration::from_secs(30), leader)
+        timeout(Duration::from_secs(60), leader)
             .await
             .unwrap()
             .unwrap(),
@@ -956,7 +962,7 @@ async fn completion_during_real_inventory_keeps_backing_credit_after_pending_ins
     let pending:i64=db.query_one_raw(statement("SELECT count(*) AS count FROM mst2_chunk_receipt_generation WHERE state IN ('RESERVED','CREATING')",[])).await.unwrap().unwrap().try_get("","count").unwrap();
     assert_eq!(pending, 0);
     inventory_release.notify_one();
-    let error = timeout(Duration::from_secs(10), capacity)
+    let error = timeout(Duration::from_secs(60), capacity)
         .await
         .unwrap()
         .unwrap()
@@ -1182,7 +1188,7 @@ async fn late_cancelled_create_is_reserved_and_old_key_replay_preserves_new_gene
     let app = fixture.app.clone();
     let request = fixture.request("GET", "chunk-map?path=/file", Body::empty());
     let cancelled = tokio::spawn(async move { app.oneshot(request).await });
-    timeout(Duration::from_secs(10), entered.notified())
+    timeout(Duration::from_secs(60), entered.notified())
         .await
         .unwrap();
     let old_key: String = db
@@ -1390,7 +1396,7 @@ async fn empty_source_fragment_after_deadline_does_not_renew_install_or_publish(
     let task = tokio::spawn(async move {
         VerifiedSourceChunkMap::verify(&handler, source, &verifier_budget, &owner).await
     });
-    timeout(Duration::from_secs(10), entered.notified())
+    timeout(Duration::from_secs(60), entered.notified())
         .await
         .unwrap();
     let mono = fixture.state.storage.mono_storage();

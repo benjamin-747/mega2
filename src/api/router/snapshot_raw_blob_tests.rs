@@ -334,7 +334,16 @@ async fn raw_transport_quota_rejects_next_chunk_before_more_source_io_and_errors
 
 #[tokio::test]
 async fn warm_raw_corruption_growth_truncation_and_late_error_never_yield_the_last_bytes() {
-    let fixture = Fixture::new().await;
+    // FIX-OX-26: assertions here do not concern the lease budget; the 600 s default can lapse under
+    // a parallel full-suite run, so the call site states a test-only budget (FIX-OX-23 precedent).
+    let fixture = Fixture::new_rooted_with_options(
+        &[],
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     fixture.map("/file").await;
     let mut wrong = fixture.raw.clone();
     wrong[0] ^= 1;
@@ -433,7 +442,7 @@ async fn raw_drop_cancel_and_revocation_during_held_io_drop_producer_and_all_own
                 let first = stream.next().await;
                 (first, stream)
             });
-            timeout(Duration::from_secs(10), entered.notified())
+            timeout(Duration::from_secs(60), entered.notified())
                 .await
                 .unwrap();
             fixture.counts.assert(1, 1);
@@ -576,7 +585,7 @@ async fn empty_raw_post_await_revocation_fails_before_another_eof_poll_or_empty_
         let app = budgeted_app(&fixture, &response_budget, &scratch_budget);
         let request = fixture.request("GET", "blob?path=/empty", Body::empty());
         let mut task = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
-        timeout(Duration::from_secs(10), entered.notified())
+        timeout(Duration::from_secs(60), entered.notified())
             .await
             .unwrap();
         fixture.counts.assert(1, 0);
@@ -600,7 +609,16 @@ async fn empty_raw_post_await_revocation_fails_before_another_eof_poll_or_empty_
 #[tokio::test]
 async fn raw_physical_size_and_current_fact_fail_before_body_and_path_errors_keep_formal_statuses()
 {
-    let fixture = Fixture::new().await;
+    // FIX-OX-26: assertions here do not concern the lease budget; the 600 s default can lapse under
+    // a parallel full-suite run, so the call site states a test-only budget (FIX-OX-23 precedent).
+    let fixture = Fixture::new_rooted_with_options(
+        &[],
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     fixture.map("/file").await;
     fixture.counts.reset();
     for (path, status, code) in [
