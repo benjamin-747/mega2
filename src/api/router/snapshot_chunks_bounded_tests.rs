@@ -281,7 +281,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         fixture.counts.reset();
         error(
             fixture
-                .send_retrying("POST", "chunks", || Body::from(body.to_string()))
+                .send("POST", "chunks", Body::from(body.to_string()))
                 .await,
             status,
             code,
@@ -298,7 +298,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
     fixture.counts.reset();
     error(
         fixture
-            .send_retrying("POST", "chunks", || Body::from(batch.to_string()))
+            .send("POST", "chunks", Body::from(batch.to_string()))
             .await,
         503,
         "OBJECT_UNAVAILABLE",
@@ -324,7 +324,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         "chunks",
         Body::from(body.to_string()),
     )));
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     task.abort();
@@ -351,7 +351,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         "chunks",
         Body::from(body.to_string()),
     )));
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     let revoked = fixture

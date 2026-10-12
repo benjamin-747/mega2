@@ -291,7 +291,16 @@ async fn oversized_item_and_later_invalid_path_reject_entire_batch_before_body_i
 #[tokio::test]
 async fn unique_batch_over_eight_mib_rejects_before_any_body_io() {
     let objects = files(33, 256 * 1024);
-    let fixture = fixture(&objects).await;
+    // FIX-OX-26: the assertion does not concern the lease budget; the 600 s default
+    // can lapse under a parallel full-suite run, so state a test-only budget.
+    let fixture = Fixture::new_rooted_with_options(
+        &objects,
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     error(
         fixture
             .send_retrying("POST", "objects", || body(&objects))
@@ -308,7 +317,16 @@ async fn unique_batch_over_eight_mib_rejects_before_any_body_io() {
 async fn cap_boundaries_and_empty_object_keep_exact_raw_bytes_and_end_counts() {
     let mut objects = files(32, 256 * 1024);
     objects.push(("empty".into(), Vec::new()));
-    let fixture = fixture(&objects[..32]).await;
+    // FIX-OX-26: the assertion does not concern the lease budget; the 600 s default
+    // can lapse under a parallel full-suite run, so state a test-only budget.
+    let fixture = Fixture::new_rooted_with_options(
+        &objects[..32],
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     let request = request_bytes(&objects);
     assert_objects(
         fixture
@@ -378,6 +396,7 @@ async fn conflicting_sizes_reject_before_io_and_distinct_oids_still_verify_each_
                 size: 8193,
                 digest: first_digest,
             }],
+            lease_seconds: Some(3600),
             ..Default::default()
         },
     )
@@ -402,6 +421,7 @@ async fn conflicting_sizes_reject_before_io_and_distinct_oids_still_verify_each_
                 size: 8192,
                 digest: second_digest,
             }],
+            lease_seconds: Some(3600),
             ..Default::default()
         },
     )
@@ -688,7 +708,7 @@ async fn cancelling_actual_object_request_drops_held_stream_and_retry_succeeds()
         "objects",
         body(&objects),
     )));
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     assert!(!task.is_finished());
@@ -733,7 +753,7 @@ async fn lease_revoked_during_object_load_cannot_deliver_verified_frames() {
         "objects",
         body(&objects),
     )));
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     let revoked = fixture

@@ -40,13 +40,13 @@ const READER_LIFECYCLE_SQL: &str = include_str!("qualified_metadata_reader_lifec
 mod rooted;
 pub(crate) use rooted::{RootedLookupStatus, RootedQualifiedMetadataRepository};
 #[cfg(test)]
+pub(crate) use rooted::{
+    RootedMaintenanceWork, RootedPrepareIntent, with_rooted_reader_barriers,
+    with_rooted_source_fact_barriers, with_rooted_source_temporary_shadow,
+};
+#[cfg(test)]
 #[path = "qualified_metadata_reader_previous_fixture.rs"]
 pub(crate) mod reader_previous_fixture;
-#[cfg(test)]
-pub(crate) use rooted::{
-    RootedPrepareIntent, with_rooted_reader_barriers, with_rooted_source_fact_barriers,
-    with_rooted_source_temporary_shadow,
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SnapshotMetadataFamily {

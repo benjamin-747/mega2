@@ -19,6 +19,8 @@ mod sessions;
 mod gc;
 #[path = "qualified_metadata_reader.rs"]
 mod reader;
+#[cfg(test)]
+pub(crate) use gc::RootedMaintenanceWork;
 pub(crate) use reader::RootedLookupStatus;
 #[cfg(test)]
 pub(crate) use reader::{

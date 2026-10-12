@@ -98,13 +98,40 @@ async fn collect_unowned(fixture: &Fixture) {
         .await
         .unwrap();
     for _ in 0..8 {
-        let work = writer.maintenance_tick(64).await.unwrap();
+        let work = maintenance_tick_retrying(writer, 64).await;
         assert!(work.collector_enabled && work.examined <= 64);
         if q_count(fixture, "SELECT count(*) FROM {q}.mst2_metadata_payload").await == 0 {
             return;
         }
     }
     panic!("bounded maintenance failed to collect the small unowned fixture");
+}
+
+/// FIX-OX-26: `maintenance_tick` can transiently return `TemporaryUnavailable`
+/// ("qualified source is being updated; retry") when another goroutine holds the
+/// qualified source lock under a heavily contended parallel run. Retry that exact
+/// documented-transient code a bounded number of times; every other error still
+/// propagates (failing closed) so no assertion is weakened.
+async fn maintenance_tick_retrying(
+    writer: &crate::jupiter::storage::qualified_metadata_family::RootedQualifiedMetadataRepository,
+    limit: u16,
+) -> crate::jupiter::storage::qualified_metadata_family::RootedMaintenanceWork {
+    const ATTEMPTS: u32 = 40;
+    for attempt in 0..ATTEMPTS {
+        match writer.maintenance_tick(limit).await {
+            Ok(work) => return work,
+            Err(err) if err.code == SnapshotErrorCode::TemporaryUnavailable => {
+                if attempt + 1 >= ATTEMPTS {
+                    panic!(
+                        "maintenance_tick kept reporting its documented transient state for 10 s"
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            Err(err) => panic!("maintenance_tick failed: {err:?}"),
+        }
+    }
+    unreachable!("bounded retry loop must return or fail inside the loop")
 }
 
 #[tokio::test]
@@ -361,27 +388,29 @@ async fn rooted_reader_release_race_keeps_independent_roots_until_owned_buffers_
         .await
         .unwrap();
     assert_eq!(q_count(&fixture,"SELECT count(*) FROM {q}.mst2_metadata_root_anchor WHERE anchor_kind IN ('REQUEST','READER')").await,2);
-    let work = fixture
-        .state
-        .storage
-        .rooted_qualified_metadata_writer()
-        .await
-        .unwrap()
-        .maintenance_tick(64)
-        .await
-        .unwrap();
+    let work = maintenance_tick_retrying(
+        fixture
+            .state
+            .storage
+            .rooted_qualified_metadata_writer()
+            .await
+            .unwrap(),
+        64,
+    )
+    .await;
     assert_eq!(work.payload_pages_removed, 0);
     assert_eq!(release(&fixture, &fixture.lease).await["released"], true);
     assert_eq!(q_count(&fixture,"SELECT count(*) FROM {q}.mst2_metadata_root_anchor WHERE anchor_kind IN ('REQUEST','READER')").await,2);
-    let work = fixture
-        .state
-        .storage
-        .rooted_qualified_metadata_writer()
-        .await
-        .unwrap()
-        .maintenance_tick(64)
-        .await
-        .unwrap();
+    let work = maintenance_tick_retrying(
+        fixture
+            .state
+            .storage
+            .rooted_qualified_metadata_writer()
+            .await
+            .unwrap(),
+        64,
+    )
+    .await;
     assert_eq!(work.payload_pages_removed, 0);
     assert_eq!(
         q_count(

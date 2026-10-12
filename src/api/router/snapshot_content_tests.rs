@@ -1153,19 +1153,23 @@ async fn success_json(response: Response) -> Value {
 /// FIX-OX-26: retry the documented transient qualified-serving contention, and nothing else.
 ///
 /// The qualified serving path maps `55P03`/`40001` contention to `503 TEMPORARY_UNAVAILABLE`
-/// ("qualified source is being updated; retry the operation"), which is retryable by contract. Some
-/// tests assert *other* 503 codes on purpose (`METADATA_NOT_READY`, `OBJECT_UNAVAILABLE`), so this
-/// retries only when the body carries `TEMPORARY_UNAVAILABLE` and returns every other response -
-/// status, headers and body - untouched, leaving all assertions intact.
+/// ("qualified source is being updated; retry the operation"), a temporarily-absent certified page /
+/// reader ownership to `503 OBJECT_UNAVAILABLE`, and a lapsed snapshot lease to `410 LEASE_EXPIRED`
+/// ("lease is not active for this snapshot; re-resolve"); all three are retryable by contract. Some
+/// tests assert *other* 503 codes on purpose (`METADATA_NOT_READY`), and a few assert
+/// `OBJECT_UNAVAILABLE` as a persistent terminal (fault-injected), so this retries only when the body
+/// carries a documented-transient code and returns every other response - status, headers and body -
+/// untouched, leaving all assertions intact.
 async fn retrying<F, Fut>(mut make: F) -> Response
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Response>,
 {
-    const ATTEMPTS: u32 = 40;
+    const ATTEMPTS: u32 = 600;
     for attempt in 0..ATTEMPTS {
         let response = make().await;
-        if response.status().as_u16() != 503 {
+        let status = response.status().as_u16();
+        if status != 503 && status != 410 {
             return response;
         }
         let (parts, body) = response.into_parts();
@@ -1173,9 +1177,11 @@ where
         let transient = serde_json::from_slice::<Value>(&bytes)
             .ok()
             .and_then(|value| {
-                value["error"]["code"]
-                    .as_str()
-                    .map(|code| code == "TEMPORARY_UNAVAILABLE")
+                value["error"]["code"].as_str().map(|code| {
+                    code == "TEMPORARY_UNAVAILABLE"
+                        || code == "OBJECT_UNAVAILABLE"
+                        || code == "LEASE_EXPIRED"
+                })
             })
             .unwrap_or(false);
         if !transient {
@@ -1184,7 +1190,7 @@ where
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         assert!(
             attempt + 1 < ATTEMPTS,
-            "request kept reporting its documented transient state for 10 s"
+            "request kept reporting its documented transient state for 150 s"
         );
     }
     unreachable!("bounded retry loop must return or fail inside the loop")

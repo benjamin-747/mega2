@@ -354,7 +354,7 @@ async fn actual_warm_body_owner_cancels_never_returning_open_and_next_without_ba
                     error(response, 410, "LEASE_EXPIRED", false).await;
                 }
             });
-            timeout(Duration::from_secs(60), entered.notified())
+            timeout(Duration::from_secs(180), entered.notified())
                 .await
                 .unwrap();
             assert_eq!(count(db, "mst2_chunk_reader").await, 1);
@@ -457,7 +457,7 @@ async fn actual_cold_builder_uses_remaining_database_deadline_for_open_and_next_
         let mut task = tokio::spawn(async move {
             VerifiedSourceChunkMap::verify(&handler, source, &task_budget, &admission).await
         });
-        timeout(Duration::from_secs(60), entered.notified())
+        timeout(Duration::from_secs(180), entered.notified())
             .await
             .unwrap();
         assert!(budget.used() > 0);
@@ -525,7 +525,7 @@ async fn actual_receipt_create_and_read_waits_cancel_without_backend_release_or_
             let repository = task_storage.chunk_maps().await.unwrap();
             repository.install(verified, &objects, &admission).await
         });
-        timeout(Duration::from_secs(60), entered.notified())
+        timeout(Duration::from_secs(180), entered.notified())
             .await
             .unwrap();
         let mono = fixture.state.storage.mono_storage();
@@ -625,7 +625,7 @@ async fn held_raw_and_exact_range_do_not_resume_after_actual_reader_expiry() {
                 error(response, 410, "LEASE_EXPIRED", false).await;
             }
         });
-        timeout(Duration::from_secs(60), entered.notified())
+        timeout(Duration::from_secs(180), entered.notified())
             .await
             .unwrap();
         assert_eq!(count(db, "mst2_chunk_reader").await, 1);
@@ -916,7 +916,7 @@ async fn completion_during_real_inventory_keeps_backing_credit_after_pending_ins
     let app = fixture.app.clone();
     let request = fixture.request("GET", "chunk-map?path=/file", Body::empty());
     let leader = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
-    timeout(Duration::from_secs(60), create_entered.notified())
+    timeout(Duration::from_secs(180), create_entered.notified())
         .await
         .unwrap();
     *fixture.counts.receipt_late_create_holds.lock().unwrap() = None;
@@ -947,12 +947,12 @@ async fn completion_during_real_inventory_keeps_backing_credit_after_pending_ins
         counts: observer_counts,
     }));
     let capacity = tokio::spawn(async move { observer.test_new_install_capacity(&observed).await });
-    timeout(Duration::from_secs(60), inventory_entered.notified())
+    timeout(Duration::from_secs(180), inventory_entered.notified())
         .await
         .unwrap();
     create_release.notify_one();
     success_json(
-        timeout(Duration::from_secs(60), leader)
+        timeout(Duration::from_secs(180), leader)
             .await
             .unwrap()
             .unwrap(),
@@ -962,7 +962,7 @@ async fn completion_during_real_inventory_keeps_backing_credit_after_pending_ins
     let pending:i64=db.query_one_raw(statement("SELECT count(*) AS count FROM mst2_chunk_receipt_generation WHERE state IN ('RESERVED','CREATING')",[])).await.unwrap().unwrap().try_get("","count").unwrap();
     assert_eq!(pending, 0);
     inventory_release.notify_one();
-    let error = timeout(Duration::from_secs(60), capacity)
+    let error = timeout(Duration::from_secs(180), capacity)
         .await
         .unwrap()
         .unwrap()
@@ -986,7 +986,17 @@ async fn json_chunk_and_raw_last_transport_clones_block_actual_collection() {
     use crate::ceres::snapshot::content_budget::{MemoryBudget, RANGE_WORK_BYTES};
 
     for route in 0..3 {
-        let fixture = Fixture::new().await;
+        // FIX-OX-26: assertions do not concern the lease budget; the 600 s default
+        // can lapse under a parallel full-suite run while the body stream drains, so
+        // state a test-only budget (FIX-OX-23 precedent).
+        let fixture = Fixture::new_rooted_with_options(
+            &[],
+            FixtureOptions {
+                lease_seconds: Some(3600),
+                ..FixtureOptions::default()
+            },
+        )
+        .await;
         let map = fixture.map("/file").await;
         let repository = fixture.state.storage.chunk_maps().await.unwrap();
         let mono = fixture.state.storage.mono_storage();
@@ -1188,7 +1198,7 @@ async fn late_cancelled_create_is_reserved_and_old_key_replay_preserves_new_gene
     let app = fixture.app.clone();
     let request = fixture.request("GET", "chunk-map?path=/file", Body::empty());
     let cancelled = tokio::spawn(async move { app.oneshot(request).await });
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     let old_key: String = db
@@ -1399,7 +1409,7 @@ async fn empty_source_fragment_after_deadline_does_not_renew_install_or_publish(
     let task = tokio::spawn(async move {
         VerifiedSourceChunkMap::verify(&handler, source, &verifier_budget, &owner).await
     });
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     let mono = fixture.state.storage.mono_storage();

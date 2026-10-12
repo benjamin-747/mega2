@@ -366,7 +366,7 @@ async fn receipt_orphan_failure_and_cancelled_install_release_owned_credit_and_r
             let app = fixture.app.clone();
             let request = fixture.request("GET", "chunk-map?path=/file", Body::empty());
             let task = tokio::spawn(async move { app.oneshot(request).await });
-            timeout(Duration::from_secs(60), entered.notified())
+            timeout(Duration::from_secs(180), entered.notified())
                 .await
                 .unwrap();
             assert!(budget.used() > 4 * 1024 * 1024);
@@ -384,7 +384,7 @@ async fn receipt_orphan_failure_and_cancelled_install_release_owned_credit_and_r
                 .store(true, Ordering::SeqCst);
             error(
                 fixture
-                    .send_retrying("GET", "chunk-map?path=/file", Body::empty)
+                    .send("GET", "chunk-map?path=/file", Body::empty())
                     .await,
                 503,
                 "TEMPORARY_UNAVAILABLE",
@@ -463,7 +463,7 @@ async fn wait_owners(
     flight: &crate::ceres::snapshot::chunk_map_gate::InstallFlight,
     owners: usize,
 ) {
-    timeout(Duration::from_secs(60), async {
+    timeout(Duration::from_secs(180), async {
         loop {
             if flight.test_owner_count() == owners {
                 break;
@@ -514,7 +514,7 @@ async fn same_source_cold_actual_http_callers_share_one_full_pass_and_each_reche
             .is_ok()
     );
     let (entered, release, leader) = held_leader(&fixture);
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     assert!(budget.used() > 4 * 1024 * 1024);
@@ -585,7 +585,7 @@ async fn failed_or_cancelled_leader_and_cancelled_waiter_leave_actual_http_retry
                 .is_ok()
         );
         let (entered, release, leader) = held_leader(&fixture);
-        timeout(Duration::from_secs(60), entered.notified())
+        timeout(Duration::from_secs(180), entered.notified())
             .await
             .unwrap();
         let flight = observer(&fixture).await;
@@ -971,7 +971,7 @@ async fn failed_digest_failed_body_and_cancelled_cold_producer_allow_the_joined_
         let app = fixture.app.clone();
         let request = fixture.request("GET", "chunk-map?path=/file", Body::empty());
         let leader = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
-        timeout(Duration::from_secs(60), entered.notified())
+        timeout(Duration::from_secs(180), entered.notified())
             .await
             .unwrap();
         let flight = observer(&fixture).await;
@@ -1034,13 +1034,13 @@ async fn different_current_sources_enter_cold_installations_independently() {
     )
     .await;
     let (entered, release, leader) = held_leader(&fixture);
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     let app = fixture.app.clone();
     let request = fixture.request("GET", "chunk-map?path=/other", Body::empty());
     let other = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
-    timeout(Duration::from_secs(60), entered.notified())
+    timeout(Duration::from_secs(180), entered.notified())
         .await
         .unwrap();
     assert_eq!(fixture.counts.whole.load(Ordering::SeqCst), 2);

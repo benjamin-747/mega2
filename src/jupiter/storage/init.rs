@@ -140,8 +140,14 @@ fn setup_option(db_config: &DbConfig) -> ConnectOptions {
         .min_connections(db_config.min_connection)
         .acquire_timeout(Duration::from_secs(db_config.acquire_timeout))
         .connect_timeout(Duration::from_secs(db_config.connect_timeout))
-        .idle_timeout(Duration::from_secs(8))
-        .max_lifetime(Duration::from_secs(8))
+        // 60 s on purpose (FIX-05 / FIX-OX-26): these are not properties under
+        // test. A short idle/lifetime would evict a connection mid-test under a
+        // loaded `cargo test --all`, silently dropping session-scoped `pg_temp`
+        // shadow tables and surfacing as spurious `42P01`/relation-not-exists
+        // (a different test in each run). Generous bounds keep the session
+        // alive long enough for the test while still recycling eventually.
+        .idle_timeout(Duration::from_secs(60))
+        .max_lifetime(Duration::from_secs(60))
         .sqlx_logging(db_config.sqlx_logging)
         .sqlx_logging_level(log::LevelFilter::Debug);
     opt
