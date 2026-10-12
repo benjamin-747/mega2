@@ -1066,8 +1066,11 @@ impl Fixture {
     }
 
     async fn map(&self, path: &str) -> Value {
+        // FIX-OX-26: `map` demands the definitive map, so honour the documented transient contention
+        // (503 TEMPORARY_UNAVAILABLE from the mapped 55P03/40001) with the shared bounded retry.
+        // Every test that fetches a map through this helper benefits, and no assertion changes.
         success_json(
-            self.send("GET", &format!("chunk-map?path={path}"), Body::empty())
+            self.send_retrying("GET", &format!("chunk-map?path={path}"), || Body::empty())
                 .await,
         )
         .await

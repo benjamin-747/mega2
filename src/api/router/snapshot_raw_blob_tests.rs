@@ -428,10 +428,15 @@ async fn raw_drop_cancel_and_revocation_during_held_io_drop_producer_and_all_own
         );
         let response_budget = MemoryBudget::new(2 * CHUNK_SIZE as usize);
         let scratch_budget = MemoryBudget::new(RANGE_WORK_BYTES);
-        let response = budgeted_app(&fixture, &response_budget, &scratch_budget)
-            .oneshot(fixture.request("GET", "blob?path=/file", Body::empty()))
-            .await
-            .unwrap();
+        // FIX-OX-26: the serving path documents its transient 55P03/40001 contention as retryable;
+        // retry only that code, rebuilding the request per attempt (Request<Body> is not Clone and
+        // the router must be cloned inside the closure to keep it FnMut).
+        let response = retrying(|| {
+            let app = budgeted_app(&fixture, &response_budget, &scratch_budget);
+            let request = fixture.request("GET", "blob?path=/file", Body::empty());
+            async move { app.oneshot(request).await.unwrap() }
+        })
+        .await;
         assert_eq!(response.status(), 200);
         fixture.counts.assert(1, 0);
         if mode == 0 {
