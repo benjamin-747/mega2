@@ -166,11 +166,18 @@ async fn default_rooted_http_handoff_renew_release_and_fresh_incarnation_keep_ex
     assert_eq!(release(&fixture, &fixture.lease).await["released"], true);
     assert_eq!(release(&fixture, &fixture.lease).await["released"], false);
     assert_eq!(q_count(&fixture,"SELECT count(*) FROM {q}.mst2_qualified_lease_binding WHERE state='RELEASED' AND lease_epoch=2").await,1);
-    let mut request = fixture.request("GET", "descriptor", Body::empty());
-    request
-        .headers_mut()
-        .insert("x-mega-snapshot-lease", second.parse().unwrap());
-    success_json(fixture.app.clone().oneshot(request).await.unwrap()).await;
+    success_json(
+        retrying(|| {
+            let app = fixture.app.clone();
+            let mut request = fixture.request("GET", "descriptor", Body::empty());
+            request
+                .headers_mut()
+                .insert("x-mega-snapshot-lease", second.parse().unwrap());
+            async move { app.oneshot(request).await.unwrap() }
+        })
+        .await,
+    )
+    .await;
     assert_eq!(release(&fixture, second).await["released"], true);
     assert_eq!(
         q_count(
@@ -529,7 +536,9 @@ async fn actual_q_body_callers_reject_changed_or_deleted_source_before_opening_a
             .await
             .unwrap();
         assert_ne!(source_revision(&fixture, &oid).await, revision);
-        let response = fixture.send("GET", "blob?path=/file", Body::empty()).await;
+        let response = fixture
+            .send_retrying("GET", "blob?path=/file", || Body::empty())
+            .await;
         assert!(response.status().is_client_error() || response.status().is_server_error());
         fixture.counts.assert(0, 0);
     }
@@ -790,24 +799,26 @@ async fn actual_q_lease_http_and_direct_handoff_retry_source_lock_without_partia
             format!("/api/v2/snapshots/leases/{}", fixture.lease),
         ),
     ] {
-        let body = if uri.ends_with("/resolve") {
-            Body::from(json!({"target":{"kind":"latest"},"scope":"/project"}).to_string())
-        } else {
-            Body::empty()
-        };
-        let request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header("authorization", format!("Bearer {TOKEN}"))
-            .header("content-type", "application/json")
-            .body(body)
-            .unwrap();
         let response = tokio::time::timeout(
             Duration::from_secs(60),
-            fixture.app.clone().oneshot(request),
+            retrying(|| {
+                let app = fixture.app.clone();
+                let body = if uri.ends_with("/resolve") {
+                    Body::from(json!({"target":{"kind":"latest"},"scope":"/project"}).to_string())
+                } else {
+                    Body::empty()
+                };
+                let request = Request::builder()
+                    .method(method)
+                    .uri(uri.clone())
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .header("content-type", "application/json")
+                    .body(body)
+                    .unwrap();
+                async move { app.oneshot(request).await.unwrap() }
+            }),
         )
         .await
-        .unwrap()
         .unwrap();
         error(response, 503, "TEMPORARY_UNAVAILABLE", true).await;
         assert_eq!(durable_lease_state(&fixture).await, before);
