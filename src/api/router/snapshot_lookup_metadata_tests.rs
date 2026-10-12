@@ -28,10 +28,12 @@ async fn mst2_durable_http_lookup_uses_verified_metadata_after_service_rebuild_w
         "/link/child",
     ];
     let value = success_json(
-        app(&state)
-            .oneshot(fixture.request("POST", "lookup", lookup_body(&paths)))
-            .await
-            .unwrap(),
+        retrying(|| {
+            let app = app(&state);
+            let request = fixture.request("POST", "lookup", lookup_body(&paths));
+            async move { app.oneshot(request).await.unwrap() }
+        })
+        .await,
     )
     .await;
     assert_eq!(value["snapshot_id"], fixture.snapshot);

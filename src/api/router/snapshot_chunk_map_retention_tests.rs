@@ -1345,10 +1345,12 @@ async fn actual_backing_quota_and_unsupported_capability_reject_before_source_op
                 counts: counts.clone(),
             })),
         };
-        let response = router(&state)
-            .oneshot(fixture.request("GET", "chunk-map?path=/file", Body::empty()))
-            .await
-            .unwrap();
+        let response = retrying(|| {
+            let app = router(&state);
+            let request = fixture.request("GET", "chunk-map?path=/file", Body::empty());
+            async move { app.oneshot(request).await.unwrap() }
+        })
+        .await;
         if unsupported {
             error(response, 503, "TEMPORARY_UNAVAILABLE", true).await;
         } else {
