@@ -1041,19 +1041,11 @@ impl Fixture {
         suffix: &str,
         make_body: F,
     ) -> Response {
-        const ATTEMPTS: u32 = 40;
-        for attempt in 0..ATTEMPTS {
-            let response = self.send(method, suffix, make_body()).await;
-            if response.status().as_u16() != 503 {
-                return response;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            assert!(
-                attempt + 1 < ATTEMPTS,
-                "request kept reporting its documented retryable state for 10 s"
-            );
-        }
-        unreachable!("bounded retry loop must return or fail inside the loop")
+        retrying(|| {
+            let body = make_body();
+            async move { self.send(method, suffix, body).await }
+        })
+        .await
     }
 
     /// FIX-OX-26: the same bounded retry for tests that build a request and drive it through
@@ -1062,19 +1054,11 @@ impl Fixture {
     /// retryable, so a test asserting a definitive outcome retries it with a bound instead of
     /// treating transient contention as the result. Assertions are unchanged.
     async fn oneshot_retrying<F: Fn() -> Request<Body>>(&self, make_request: F) -> Response {
-        const ATTEMPTS: u32 = 40;
-        for attempt in 0..ATTEMPTS {
-            let response = self.app.clone().oneshot(make_request()).await.unwrap();
-            if response.status().as_u16() != 503 {
-                return response;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            assert!(
-                attempt + 1 < ATTEMPTS,
-                "request kept reporting its documented retryable state for 10 s"
-            );
-        }
-        unreachable!("bounded retry loop must return or fail inside the loop")
+        retrying(|| {
+            let request = make_request();
+            async move { self.app.clone().oneshot(request).await.unwrap() }
+        })
+        .await
     }
 
     fn digest_string(&self) -> String {
@@ -1161,6 +1145,46 @@ async fn success_json(response: Response) -> Value {
         .unwrap();
     assert_eq!(status.as_u16(), 200, "{}", String::from_utf8_lossy(&bytes));
     serde_json::from_slice(&bytes).unwrap()
+}
+
+/// FIX-OX-26: retry the documented transient qualified-serving contention, and nothing else.
+///
+/// The qualified serving path maps `55P03`/`40001` contention to `503 TEMPORARY_UNAVAILABLE`
+/// ("qualified source is being updated; retry the operation"), which is retryable by contract. Some
+/// tests assert *other* 503 codes on purpose (`METADATA_NOT_READY`, `OBJECT_UNAVAILABLE`), so this
+/// retries only when the body carries `TEMPORARY_UNAVAILABLE` and returns every other response -
+/// status, headers and body - untouched, leaving all assertions intact.
+async fn retrying<F, Fut>(mut make: F) -> Response
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    const ATTEMPTS: u32 = 40;
+    for attempt in 0..ATTEMPTS {
+        let response = make().await;
+        if response.status().as_u16() != 503 {
+            return response;
+        }
+        let (parts, body) = response.into_parts();
+        let bytes = to_bytes(body, 64 * 1024).await.unwrap_or_default();
+        let transient = serde_json::from_slice::<Value>(&bytes)
+            .ok()
+            .and_then(|value| {
+                value["error"]["code"]
+                    .as_str()
+                    .map(|code| code == "TEMPORARY_UNAVAILABLE")
+            })
+            .unwrap_or(false);
+        if !transient {
+            return Response::from_parts(parts, Body::from(bytes));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        assert!(
+            attempt + 1 < ATTEMPTS,
+            "request kept reporting its documented transient state for 10 s"
+        );
+    }
+    unreachable!("bounded retry loop must return or fail inside the loop")
 }
 
 async fn error(response: Response, status: u16, code: &str, retryable: bool) {
