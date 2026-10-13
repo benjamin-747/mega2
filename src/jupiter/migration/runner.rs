@@ -14,7 +14,7 @@ use crate::common::errors::MegaError;
 /// `deadlock detected` (40P01) or `lock_not_available` (55P03). Each migration
 /// runs in its own transaction, so retrying the whole `Migrator::up` is
 /// idempotent and does not weaken any assertion or skip a migration.
-fn migration_retryable(e: &sea_orm::DbErr) -> bool {
+pub(crate) fn migration_retryable(e: &sea_orm::DbErr) -> bool {
     let text = format!("{e:?}").to_ascii_lowercase();
     text.contains("40p01")
         || text.contains("deadlock detected")

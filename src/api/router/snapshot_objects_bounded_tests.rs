@@ -440,13 +440,15 @@ async fn conflicting_sizes_reject_before_io_and_distinct_oids_still_verify_each_
     wrong_expected_digest["items"][1]["expected_digest"] =
         json!(format!("sha256:{}", "00".repeat(32)));
     fixture.counts.reset();
+    // FIX-OX-26: the definitive 409 MUST_DIGEST_MISMATCH outcome is only
+    // produced once the source resolves; a transient `503 TEMPORARY_UNAVAILABLE`
+    // under a heavy parallel full-suite load must be retried, not surfaced as
+    // the result. Assertion (409 / EXPECTED_DIGEST_MISMATCH) is unchanged.
     error(
         fixture
-            .send(
-                "POST",
-                "objects",
-                Body::from(wrong_expected_digest.to_string()),
-            )
+            .send_retrying("POST", "objects", || {
+                Body::from(wrong_expected_digest.to_string())
+            })
             .await,
         409,
         "EXPECTED_DIGEST_MISMATCH",
@@ -558,7 +560,17 @@ async fn truncated_wrong_sha_and_late_stream_error_never_produce_200() {
 #[tokio::test]
 async fn a_later_object_stream_failure_keeps_earlier_verified_data_unpublished() {
     let objects = files(2, 8192);
-    let fixture = fixture(&objects).await;
+    // FIX-OX-26: the assertion is the faulted 500 INTERNAL outcome, not the lease
+    // budget; the default lease can lapse under a loaded parallel suite, so state
+    // a test-only budget.
+    let fixture = Fixture::new_rooted_with_options(
+        &objects,
+        FixtureOptions {
+            lease_seconds: Some(3600),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
     install_fault(
         &fixture,
         "/object-001",

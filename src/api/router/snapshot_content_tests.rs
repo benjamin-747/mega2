@@ -1190,7 +1190,8 @@ where
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         assert!(
             attempt + 1 < ATTEMPTS,
-            "request kept reporting its documented transient state for 150 s"
+            "request kept reporting its documented transient state for {} s",
+            ATTEMPTS * 250 / 1000
         );
     }
     unreachable!("bounded retry loop must return or fail inside the loop")

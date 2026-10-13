@@ -63,14 +63,21 @@ pub async fn test_db_connection(_temp_dir: &Path) -> DatabaseConnection {
     let (db_url, schema) = create_test_database_url().await;
 
     let mut opt = ConnectOptions::new(db_url);
-    opt.max_connections(2)
+    // FIX-OX-26: a loaded `cargo test --all` can push concurrent requests
+    // (e.g. a spawned held-range task plus the main body) past a two-connection
+    // pool, surfacing as `500 INTERNAL: Failed to acquire connection from pool`.
+    // The test Postgres allows up to 500 connections, so a larger per-test pool
+    // is safe and removes that artificial starvation without affecting any
+    // assertion. Bounds stay generous so only a genuinely stuck connection fails
+    // the run instead of hanging it.
+    opt.max_connections(8)
         .min_connections(1)
         // Generous on purpose (FIX-05, same rationale as `test_db_config`):
         // a full `cargo test --all` runs dozens of tests applying full-schema
         // migrations concurrently; acquire waits reflect machine load, not
         // broken code. A timeout still exists so a genuinely stuck connection
         // fails the run instead of hanging it.
-        .acquire_timeout(std::time::Duration::from_secs(120))
+        .acquire_timeout(std::time::Duration::from_secs(180))
         .connect_timeout(std::time::Duration::from_secs(60))
         .sqlx_logging(true)
         .sqlx_logging_level(log::LevelFilter::Debug);
@@ -97,7 +104,10 @@ pub async fn test_db_config(_temp_dir: &Path) -> (DbConfig, TestSchemaGuard) {
     let config = DbConfig {
         db_type: "postgres".to_owned(),
         db_url,
-        max_connection: 2,
+        // FIX-OX-26: see `test_db_connection`. A two-connection pool is too
+        // small for the concurrent requests a heavy snapshot test can issue
+        // and gets starved under a loaded run.
+        max_connection: 8,
         min_connection: 1,
         // Generous on purpose (FIX-05). These are not a property under test —
         // no test asserts how long acquiring a connection takes — but at five
@@ -111,7 +121,7 @@ pub async fn test_db_config(_temp_dir: &Path) -> (DbConfig, TestSchemaGuard) {
         // A timeout still exists so a genuinely stuck connection fails the run
         // instead of hanging it; it is simply long enough that only a real
         // problem reaches it.
-        acquire_timeout: 60,
+        acquire_timeout: 180,
         connect_timeout: 30,
         sqlx_logging: false,
     };

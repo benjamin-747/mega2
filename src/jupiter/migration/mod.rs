@@ -193,26 +193,23 @@ pub(crate) async fn test_upgrade_reader_retention(
 pub(crate) async fn test_upgrade_native_runtime(
     connection: &sea_orm::DatabaseConnection,
 ) -> Result<(), sea_orm::DbErr> {
-    use sea_orm::TransactionTrait;
     use sea_orm_migration::{MigrationTrait, SchemaManager};
 
-    let txn = connection.begin().await?;
-    let result = async {
-        m20261008_000500_fix_mst2_native_runtime::Migration
-            .up(&SchemaManager::new(&txn))
-            .await?;
-        m20261008_000600_fix_mst2_descriptor_wire::Migration
-            .up(&SchemaManager::new(&txn))
-            .await
-    }
-    .await;
-    match result {
-        Ok(()) => txn.commit().await,
-        Err(error) => {
-            txn.rollback().await?;
-            Err(error)
-        }
-    }
+    // FIX-OX-26: these native-runtime upgrade migrations take `ACCESS EXCLUSIVE`
+    // DDL locks interplayed with advisory locks and can deadlock (`40P01`) under a
+    // concurrent bootstrap; retry on the documented transient codes (see
+    // `retry_migration_upgrade`).
+    retry_migration_upgrade(connection, |txn| {
+        Box::pin(async move {
+            m20261008_000500_fix_mst2_native_runtime::Migration
+                .up(&SchemaManager::new(txn))
+                .await?;
+            m20261008_000600_fix_mst2_descriptor_wire::Migration
+                .up(&SchemaManager::new(txn))
+                .await
+        })
+    })
+    .await
 }
 
 /// Primary key `BIGINT` (not DB auto-increment); the application assigns `id` (e.g. `idgenerator::IdInstance::next_id`).
@@ -361,24 +358,56 @@ impl MigratorTrait for Migrator {
     }
 }
 
-#[cfg(test)]
+/// FIX-OX-26: the publication-handoff migration takes `LOCK TABLE ... IN ACCESS
+/// EXCLUSIVE MODE` interplayed with database-level advisory locks, so a
+/// concurrent test bootstrap can abort it with `40P01`/`55P03` (deadlock / lock
+/// not available). The migration is idempotent and runs in its own transaction,
+/// so a bounded retry is safe and does not weaken any assertion or skip a step.
+const MIGRATION_RETRY_ATTEMPTS: u32 = 5;
+
+async fn retry_migration_upgrade(
+    connection: &sea_orm::DatabaseConnection,
+    mut run: impl FnMut(
+        &sea_orm::DatabaseTransaction,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), sea_orm::DbErr>> + '_>,
+    >,
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::TransactionTrait;
+    for attempt in 0..MIGRATION_RETRY_ATTEMPTS {
+        let txn = connection.begin().await?;
+        let result = run(&txn).await;
+        match result {
+            Ok(()) => return txn.commit().await,
+            Err(error)
+                if runner::migration_retryable(&error)
+                    && attempt + 1 < MIGRATION_RETRY_ATTEMPTS =>
+            {
+                txn.rollback().await?;
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            Err(error) => {
+                txn.rollback().await?;
+                return Err(error);
+            }
+        }
+    }
+    unreachable!("bounded retry loop returns or errors inside")
+}
+
 pub(crate) async fn test_upgrade_publication_handoff(
     connection: &sea_orm::DatabaseConnection,
 ) -> Result<(), sea_orm::DbErr> {
-    use sea_orm::TransactionTrait;
     use sea_orm_migration::{MigrationTrait, SchemaManager};
 
-    let txn = connection.begin().await?;
-    let result = m20261009_000100_upgrade_qualified_publication_handoff::Migration
-        .up(&SchemaManager::new(&txn))
-        .await;
-    match result {
-        Ok(()) => txn.commit().await,
-        Err(error) => {
-            txn.rollback().await?;
-            Err(error)
-        }
-    }
+    retry_migration_upgrade(connection, |txn| {
+        Box::pin(async move {
+            m20261009_000100_upgrade_qualified_publication_handoff::Migration
+                .up(&SchemaManager::new(txn))
+                .await
+        })
+    })
+    .await
 }
 
 /// Test-only: run the publication-handoff migration with the post-install fault enabled.
@@ -387,19 +416,15 @@ pub(crate) async fn test_upgrade_publication_handoff_with_fault(
     connection: &sea_orm::DatabaseConnection,
 ) -> Result<(), sea_orm::DbErr> {
     use qualified_native_runtime_upgrade as engine;
-    use sea_orm::TransactionTrait;
     use sea_orm_migration::SchemaManager;
 
-    let txn = connection.begin().await?;
-    let manager = SchemaManager::new(&txn);
-    let result = engine::upgrade_publication_handoff_with_fault(&manager, true).await;
-    match result {
-        Ok(()) => txn.commit().await,
-        Err(error) => {
-            txn.rollback().await?;
-            Err(error)
-        }
-    }
+    retry_migration_upgrade(connection, |txn| {
+        Box::pin(async move {
+            let manager = SchemaManager::new(txn);
+            engine::upgrade_publication_handoff_with_fault(&manager, true).await
+        })
+    })
+    .await
 }
 
 #[cfg(test)]

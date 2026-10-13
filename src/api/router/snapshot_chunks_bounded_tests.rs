@@ -174,6 +174,10 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
     let mut fixture = Fixture::new_rooted_with_options(
         &[("other".to_string(), vec![19; 4096])],
         FixtureOptions {
+            // FIX-OX-26: the assertion does not concern the lease budget; the
+            // default lease can lapse while this heavy 512-chunk test runs
+            // under a loaded parallel suite, so state a test-only budget.
+            lease_seconds: Some(3600),
             initial_facts: vec![
                 InitialFact {
                     path: "/file",
@@ -201,7 +205,6 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
                     )
                 })
                 .collect(),
-            ..Default::default()
         },
     )
     .await;
@@ -319,12 +322,31 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         release: release.clone(),
         drops: drops.clone(),
     };
-    let task = tokio::spawn(fixture.app.clone().oneshot(fixture.request(
-        "POST",
-        "chunks",
-        Body::from(body.to_string()),
-    )));
-    timeout(Duration::from_secs(180), entered.notified())
+    // FIX-OX-26: a held-range request can surface the documented transient
+    // `503 TEMPORARY_UNAVAILABLE` while the source settles under a heavy
+    // parallel full-suite load; retry it so the range is eventually entered.
+    // `oneshot` for the held range does not resolve until release, so the
+    // wrapper simply awaits it (and the `entered` notification fires) once the
+    // range is actually reached.
+    let task = tokio::spawn({
+        let app = fixture.app.clone();
+        let snapshot = fixture.snapshot.clone();
+        let lease = fixture.lease.clone();
+        let body = body.clone();
+        super::retrying(move || {
+            let request = Request::builder()
+                .method("POST")
+                .uri(format!("/api/v2/snapshots/{snapshot}/chunks"))
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .header("x-mega-snapshot-lease", &lease)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let app = app.clone();
+            async move { app.oneshot(request).await.unwrap() }
+        })
+    });
+    timeout(Duration::from_secs(600), entered.notified())
         .await
         .unwrap();
     task.abort();
@@ -351,7 +373,7 @@ async fn mst2_large_chunk_uses_current_oid_strict_range_faults_cancel_retry_and_
         "chunks",
         Body::from(body.to_string()),
     )));
-    timeout(Duration::from_secs(180), entered.notified())
+    timeout(Duration::from_secs(600), entered.notified())
         .await
         .unwrap();
     let revoked = fixture

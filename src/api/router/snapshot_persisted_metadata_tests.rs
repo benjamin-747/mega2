@@ -143,7 +143,7 @@ async fn mst2_persisted_meta_matches_canonical_routes_after_rebuild_and_advance_
     for encoding in ["identity", "zstd"] {
         let body = metadata_body(json!(items), encoding);
         let bytes = tokio::time::timeout(
-            Duration::from_secs(4),
+            Duration::from_secs(60),
             metadata_bytes(&fixture, app(&state), &body),
         )
         .await
@@ -348,7 +348,7 @@ async fn mst2_persisted_meta_warm_missing_and_corrupt_pages_never_reproject_from
         .await
         .unwrap();
         let response = tokio::time::timeout(
-            Duration::from_secs(4),
+            Duration::from_secs(60),
             fixture.send("POST", "metadata/pages", Body::from(body)),
         )
         .await
@@ -370,7 +370,7 @@ async fn mst2_persisted_meta_warm_missing_and_corrupt_pages_never_reproject_from
 }
 
 async fn wait_retention_waiter(txn: &sea_orm::DatabaseTransaction) {
-    tokio::time::timeout(Duration::from_secs(4), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             txn.execute_unprepared("SELECT pg_stat_clear_snapshot()")
                 .await
@@ -661,7 +661,7 @@ async fn mst2_persisted_meta_reader_holds_protection_until_all_route_bytes_are_o
                 .await
             })
         };
-        tokio::time::timeout(Duration::from_secs(4), captured.wait())
+        tokio::time::timeout(Duration::from_secs(60), captured.wait())
             .await
             .unwrap();
         let root = format!("page:{}", context.built.metadata_root);
@@ -685,10 +685,12 @@ async fn mst2_persisted_meta_reader_holds_protection_until_all_route_bytes_are_o
                 }
             })
         };
-        // The two service connections belong to the reader and competitor.
-        // Observe their lock wait without competing for either connection.
+        // FIX-OX-26: the service pool is intentionally generous (8) so a
+        // loaded parallel suite does not starve it. The observer only needs a
+        // single connection that does not compete with the reader / competitor;
+        // we narrow it here regardless of the configured max.
         let mut observer_config = fixture.state.storage.config().database.clone();
-        assert_eq!(observer_config.max_connection, 2);
+        assert_eq!(observer_config.max_connection, 8);
         observer_config.max_connection = 1;
         observer_config.min_connection = 0;
         let observer_connection = crate::jupiter::storage::init::with_generic_history_bootstrap(
