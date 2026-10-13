@@ -560,17 +560,7 @@ async fn truncated_wrong_sha_and_late_stream_error_never_produce_200() {
 #[tokio::test]
 async fn a_later_object_stream_failure_keeps_earlier_verified_data_unpublished() {
     let objects = files(2, 8192);
-    // FIX-OX-26: the assertion is the faulted 500 INTERNAL outcome, not the lease
-    // budget; the default lease can lapse under a loaded parallel suite, so state
-    // a test-only budget.
-    let fixture = Fixture::new_rooted_with_options(
-        &objects,
-        FixtureOptions {
-            lease_seconds: Some(3600),
-            ..FixtureOptions::default()
-        },
-    )
-    .await;
+    let fixture = fixture(&objects).await;
     install_fault(
         &fixture,
         "/object-001",
