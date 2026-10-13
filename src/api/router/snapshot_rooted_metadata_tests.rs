@@ -299,11 +299,16 @@ async fn rooted_wide_directory_windows_and_lookup_survive_rebuild_with_valid_pro
         if let Some(current) = &cursor {
             suffix.push_str(&format!("&cursor={current}"));
         }
-        let response = app
-            .clone()
-            .oneshot(fixture.request("GET", &suffix, Body::empty()))
-            .await
-            .unwrap();
+        // FIX-OX-26: under a loaded parallel run these routed one-shots can
+        // surface the documented transient `503 TEMPORARY_UNAVAILABLE` when the
+        // source is being updated; retry it so the window is deterministically
+        // produced (assertion unchanged).
+        let response = super::retrying(|| {
+            let app = app.clone();
+            let request = fixture.request("GET", &suffix, Body::empty());
+            async move { app.oneshot(request).await.unwrap() }
+        })
+        .await;
         let window = success_json(response).await;
         assert_eq!(window["entry_count"], "147");
         let entries = window["entries"].as_array().unwrap();
@@ -335,9 +340,19 @@ async fn rooted_wide_directory_windows_and_lookup_survive_rebuild_with_valid_pro
             .windows(2)
             .all(|pair| pair[0].as_bytes() < pair[1].as_bytes())
     );
-    let lookup=success_json(app.oneshot(fixture.request("POST","lookup",
-        Body::from(json!({"paths":["/nested/file","/wide-139/file-139","/missing","/file/child","/link/child"]}).to_string())))
-        .await.unwrap()).await;
+    let lookup = success_json(
+        super::retrying(|| {
+            let app = app.clone();
+            let request = fixture.request(
+                "POST",
+                "lookup",
+                Body::from(json!({"paths":["/nested/file","/wide-139/file-139","/missing","/file/child","/link/child"]}).to_string()),
+            );
+            async move { app.oneshot(request).await.unwrap() }
+        })
+        .await,
+    )
+    .await;
     let statuses: Vec<_> = lookup["results"]
         .as_array()
         .unwrap()
