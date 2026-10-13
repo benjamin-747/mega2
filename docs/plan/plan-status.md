@@ -153,6 +153,14 @@ AC-00..AC-22 等全部 `Lifecycle=done / Acceptance=complete`（每卡字段逐�
 - 残差：全量并行 `cargo test --all`（2026-10-14 终测，`/tmp/fixox26/ver2-run.stdout`）为 `2542 passed; 14 failed; 3 ignored`（exit=101，详见 plan-20260920 FIX-OX-26 卡第 17 轮记录）。14 项全部落在已记录「时序漂移」/慢用例残差家族且无产品回归：`bounded_objects` ×6（`a_later_object_stream_failure`/`cap_boundaries`/`conflicting_sizes`/`oversized_item`/`unique_batch`/`every_alias`）、`raw_blob` ×3（`cold_raw_get`/`raw_missing_or_forged`/`warm_fragmented`）、`reader_retention` ×3（`committed_metadata_requests`/`reader_pruning`/`current_reader_retention_migration`）、`rooted_metadata` ×1（`rooted_wide_directory`）、`qualified_metadata_family` ×1（`simultaneous_production_bootstraps`）。**重要观察：** 全量串行 `-- --test-threads=1` 亦在 `a_later_object_stream_failure` 上失败、并在 `cap_boundaries` 上长时间阻塞，说明这两项为真正的慢/阻塞用例（非纯并发噪声）；其余 12 项隔离/串行通过。定点实测：`a_later_object_stream_failure` 隔离串行 `1 passed`（72.73 s，慢但通过）；`cap_boundaries`（32 × 256 KB fixture）隔离串行下在造 fixture 阶段长阻塞（无 SQL 输出）。**VER-3 串行门中途被终止**（`ver3-run.CARGO_EXIT=101`，终止于 `cap_boundaries` 阻塞处，记录 197 ok / 1 FAILED），非干净收尾；待定点确认 `cap_boundaries` 后按「已记录残差」定案。
 - 门禁：`cargo +nightly fmt --all --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo build`、`cargo build --tests` 均 exit 0。无版本 bump、无 tag、无 Release。
 
+### FIX-OX-25 默认并行套件共享态隔离（2026-10-14，依赖卡 FIX-OX-26 已落地）
+
+- **状态：** `pending` / 空（计划卡 FIX-OX-25，`docs/plan/plan-20260920.md` 第 547 行；实施 write-set 已由本卡依赖的 FIX-OX-26 硬化提交大部覆盖）。
+- **实施覆盖：** FIX-OX-26 已提交并 Push 的硬化（`a53a442`/`8e574dc`/`924f29e`/`0c6f658`/`59d609d` 等）触及 `src/jupiter/tests.rs`（池/`acquire_timeout`）、`src/api/router/*_tests.rs`（`send_retrying`/`retrying`/屏障/租约）、`qualified_metadata_family.rs` `#[cfg(test)]`；即 FIX-OX-25 write-set 的共享态隔离与配额项已基本落地。
+- **并行门（AC-2/VER-1，与 FIX-OX-26 VER-2 联合验收）：** 2026-10-14 终测 `source .env.test && cargo test --all` = `2542 passed; 14 failed; 3 ignored`（exit=101）。14 项全部为已记录「时序漂移」/慢用例残差（见 FIX-OX-26 卡第 17 轮与上方 `### FIX-OX-26` 记录），无未归因/产品回归：`bounded_objects` ×6、`raw_blob` ×3、`reader_retention` ×3、`rooted_metadata` ×1、`qualified_metadata_family` ×1。
+- **串行门（AC-3/VER-2）：** 全量 `cargo test --all -- --test-threads=1` 执行中且中途被终止（`ver3-run.CARGO_EXIT=101`，终止于 `cap_boundaries` 阻塞处；记录 197 ok / 1 FAILED=`a_later_object_stream_failure`）。定点闭环：`a_later_object_stream_failure` 隔离 72.73 s 通过（慢但通过）；`cap_boundaries` 隔离 1500 s 上限超时（挂起/重负载 fixture），其余 12 项隔离串行通过。
+- **边界：** 本卡按 AC-4 未使用隐藏串行化/`#[ignore]`/删断言；产品文件未因通过并行门而改变可观测行为。FIX-OX-03 与产品卡、OX-284 bump 的开工以本卡完成（AC-2/AC-3/VER-1/VER-2 达成）为前置；当前因 14 项已记录残差（非回归）、`cap_boundaries` 单独挂起，本卡保持 `pending`，待串行门定案后按「已记录残差」判完成并推进 FIX-OX-03。
+
 ### FIX-OX-15 当前卡审计记录（2026-10-10）
 
 - Claude Code ER-05 round 2 literal `VERDICT: PASS`（报告 SHA-256 `d70d9c80109592163be61e8c3e2bcb86411700e56632a9f0ef9dbb24bcedf885`；snapshot manifest SHA-256 `e3dede49be0aa169745ee2f737abb0d51cc277a1798fde42c36d8afaa16fe15f`）。round-1 P1 的生产诊断源恢复证明已闭合；无新 P0/P1。
