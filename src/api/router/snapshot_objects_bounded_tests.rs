@@ -316,6 +316,7 @@ async fn unique_batch_over_eight_mib_rejects_before_any_body_io() {
 #[tokio::test]
 async fn cap_boundaries_and_empty_object_keep_exact_raw_bytes_and_end_counts() {
     let mut objects = files(32, 256 * 1024);
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     objects.push(("empty".into(), Vec::new()));
     // FIX-OX-26: the assertion does not concern the lease budget; the 600 s default
     // can lapse under a parallel full-suite run, so state a test-only budget.
