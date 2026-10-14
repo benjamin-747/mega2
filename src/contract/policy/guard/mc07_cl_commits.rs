@@ -60,7 +60,7 @@ fn login_user(name: &str) -> LoginUser {
 }
 
 /// Storage whose `[cedar].enforcement` is the given mode (same shape as the
-/// UN-08 guard cases).
+/// `http_enforcement` cases).
 async fn storage_with_enforcement(temp: &std::path::Path, mode: &str) -> Storage {
     let mut storage = test_storage(temp).await;
     let mut config = (*storage.config).clone();

@@ -316,6 +316,7 @@ async fn unique_batch_over_eight_mib_rejects_before_any_body_io() {
 #[tokio::test]
 async fn cap_boundaries_and_empty_object_keep_exact_raw_bytes_and_end_counts() {
     let mut objects = files(32, 256 * 1024);
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     objects.push(("empty".into(), Vec::new()));
     // FIX-OX-26: the assertion does not concern the lease budget; the 600 s default
     // can lapse under a parallel full-suite run, so state a test-only budget.
@@ -560,17 +561,7 @@ async fn truncated_wrong_sha_and_late_stream_error_never_produce_200() {
 #[tokio::test]
 async fn a_later_object_stream_failure_keeps_earlier_verified_data_unpublished() {
     let objects = files(2, 8192);
-    // FIX-OX-26: the assertion is the faulted 500 INTERNAL outcome, not the lease
-    // budget; the default lease can lapse under a loaded parallel suite, so state
-    // a test-only budget.
-    let fixture = Fixture::new_rooted_with_options(
-        &objects,
-        FixtureOptions {
-            lease_seconds: Some(3600),
-            ..FixtureOptions::default()
-        },
-    )
-    .await;
+    let fixture = fixture(&objects).await;
     install_fault(
         &fixture,
         "/object-001",
