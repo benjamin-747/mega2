@@ -192,7 +192,7 @@
 
 主体**类型**是身份的一部分：即便 ACL 里存在同名用户 `42`，`Bot::"42"` 也不会继承其权限（`un27_a_bot_does_not_inherit_a_same_named_users_permissions`）。
 
-解析顺序不变（UN-22 保证先 `BotIdentity` 后 session），并且 **bot 请求不产生任何 session store 调用**——用例用计数 double 断言为 0，而不是依赖代码顺序；非 bot 的 bearer 不会被误认成 bot，仍走一次会话解析。
+解析顺序不变（UN-22 保证先 `BotIdentity` 后 session），并且 **bot 请求不产生任何 session store 调用**——`contract::policy::guard::http_enforcement` 用计数 double 断言为 0，而不是依赖代码顺序；非 bot 的 bearer 不会被误认成 bot，仍走一次会话解析。
 
 ## ACL 可信基线审计核心（UN-26）
 
@@ -275,7 +275,7 @@
 
 两者合一会导致二选一的错误：要么审计记错执行者，要么以错误主体授权。匿名调用在 `enforce` 下由 guard 返回 **403**——不是 401：后者是「没有会话」的回答，用在这里等于把认证问题冒充成授权答案，而且无会话本来就能产出 401，会成为假绿。
 
-四角色矩阵（`api::un24_merge_matrix` / `api::un24_merge_no_auth_matrix`）对两个入口断言**同一结果**。按当前 `mega_policies.cedar`，`approveMergeRequest` 是 maintainer 级动作（admin 经组继承同样具备），reader 与匿名被拒；「批准是否应当仅限 admin」属策略内容问题，归 UN-09/UN-04。
+四角色矩阵（`contract::policy::guard::http_enforcement` 的 `merge_role_matrix` / `merge_no_auth_role_matrix`）对两个入口断言**同一结果**。按当前 `mega_policies.cedar`，`approveMergeRequest` 是 maintainer 级动作（admin 经组继承同样具备），reader 与匿名被拒；「批准是否应当仅限 admin」属策略内容问题，归 UN-09/UN-04。
 
 ## guard 三态接线与真实资源解析（UN-08）
 
